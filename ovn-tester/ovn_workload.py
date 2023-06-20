@@ -28,7 +28,6 @@ ClusterConfig = namedtuple(
         'db_inactivity_probe',
         'node_net',
         'enable_ssl',
-        'node_remote',
         'node_timeout_s',
         'internal_net',
         'external_net',
@@ -36,6 +35,7 @@ ClusterConfig = namedtuple(
         'cluster_net',
         'n_workers',
         'n_relays',
+        'n_az',
         'vips',
         'vips6',
         'vip_subnet',
@@ -62,13 +62,22 @@ class Node(ovn_sandbox.Sandbox):
 
 class CentralNode(Node):
     def __init__(
-        self, phys_node, db_containers, relay_containers, mgmt_net, mgmt_ip
+        self,
+        phys_node,
+        db_containers,
+        relay_containers,
+        mgmt_net,
+        mgmt_ip,
+        gw_net,
+        az_idx,
     ):
         super(CentralNode, self).__init__(
             phys_node, db_containers[0], mgmt_net, mgmt_ip
         )
         self.db_containers = db_containers
         self.relay_containers = relay_containers
+        self.id = az_idx
+        self.gw_net = gw_net
 
     def start(self, cluster_cfg):
         log.info('Configuring central node')
@@ -144,7 +153,8 @@ class CentralNode(Node):
 
     def get_connection_string(self, cluster_cfg, port):
         protocol = "ssl" if cluster_cfg.enable_ssl else "tcp"
-        ip = self.mgmt_ip
+        off = 3 * self.id if cluster_cfg.clustered_db else self.id
+        ip = self.mgmt_ip + off
         num_conns = 3 if cluster_cfg.clustered_db else 1
         conns = [f"{protocol}:{ip + idx}:{port}" for idx in range(num_conns)]
         return ",".join(conns)
@@ -186,15 +196,37 @@ class WorkerNode(Node):
             cluster_cfg.db_inactivity_probe // 1000,
         )
 
+    def calculate_node_remotes(
+        self, node_net, clustered_db, enable_ssl, offset
+    ):
+        net = netaddr.IPNetwork(node_net)
+
+        ip_gen = net.iter_hosts()
+        # The first IP is assigned to the tester, skip it.
+        next(ip_gen)
+        skip = 3 * offset if clustered_db else offset
+        for _ in range(0, skip):
+            next(ip_gen)
+        ip_range = range(offset, offset + 3 if clustered_db else offset + 1)
+        if enable_ssl:
+            remotes = ["ssl:" + str(next(ip_gen)) + ":6642" for _ in ip_range]
+        else:
+            remotes = ["tcp:" + str(next(ip_gen)) + ":6642" for _ in ip_range]
+        return ','.join(remotes)
+
     @ovn_stats.timeit
     def connect(self, cluster_cfg):
+        remote = self.calculate_node_remotes(
+            cluster_cfg.node_net,
+            cluster_cfg.clustered_db,
+            cluster_cfg.enable_ssl,
+            self.id % cluster_cfg.n_az,
+        )
+
         log.info(
-            f'Connecting worker {self.container}: '
-            f'ovn-remote = {cluster_cfg.node_remote}'
+            f'Connecting worker {self.container}: ' f'ovn-remote = {remote}'
         )
-        self.vsctl.set_global_external_id(
-            'ovn-remote', f'{cluster_cfg.node_remote}'
-        )
+        self.vsctl.set_global_external_id('ovn-remote', f'{remote}')
 
     def configure_localnet(self, physical_net):
         log.info(f'Creating localnet on {self.container}')
@@ -442,9 +474,12 @@ class WorkerNode(Node):
 
     def get_connection_string(self, cluster_cfg, port):
         protocol = "ssl" if cluster_cfg.enable_ssl else "tcp"
-        offset = 0
-        offset += 3 if cluster_cfg.clustered_db else 1
-        offset += cluster_cfg.n_relays
+        offset = cluster_cfg.n_az
+        if cluster_cfg.clustered_db:
+            offset *= 3
+        if cluster_cfg.n_relays > 0:
+            offset += cluster_cfg.n_relays * cluster_cfg.n_az
+        offset += self.id
         return f"{protocol}:{self.mgmt_ip + offset}:{port}"
 
 
@@ -818,17 +853,17 @@ class Cluster:
 
     def create_cluster_join_switch(self, sw_name):
         self.join_switch = self.nbctl.ls_add(
-            sw_name, net_s=self.cluster_cfg.gw_net
+            sw_name, net_s=self.central_node.gw_net
         )
 
         self.join_rp = self.nbctl.lr_port_add(
             self.router,
-            'rtr-to-join',
+            f'rtr-to-{sw_name}',
             RandMac(),
-            self.cluster_cfg.gw_net.reverse(),
+            self.central_node.gw_net.reverse(),
         )
         self.join_ls_rp = self.nbctl.ls_port_add(
-            self.join_switch, 'join-to-rtr', self.join_rp
+            self.join_switch, f'{sw_name}-to-rtr', self.join_rp
         )
 
     def provision_ports(self, n_ports, passive=False):
@@ -875,8 +910,8 @@ class Cluster:
         self.last_selected_worker %= len(self.worker_nodes)
         return self.worker_nodes[self.last_selected_worker]
 
-    def provision_lb_group(self):
-        self.lb_group = lb.OvnLoadBalancerGroup('cluster-lb-group', self.nbctl)
+    def provision_lb_group(self, name='cluster-lb-group'):
+        self.lb_group = lb.OvnLoadBalancerGroup(name, self.nbctl)
         for w in self.worker_nodes:
             self.nbctl.ls_add_lbg(w.switch, self.lb_group.lbg)
             self.nbctl.lr_add_lbg(w.gw_router, self.lb_group.lbg)

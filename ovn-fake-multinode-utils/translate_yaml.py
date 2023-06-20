@@ -25,28 +25,6 @@ class GlobalConfig:
     run_ipv6: bool = False
 
 
-def calculate_node_remotes(
-    node_net: str, clustered_db: bool, n_relays: int, enable_ssl: bool
-) -> str:
-    net = netaddr.IPNetwork(node_net)
-
-    ip_gen = net.iter_hosts()
-    # The first IP is assigned to the tester, skip it.
-    next(ip_gen)
-    if n_relays > 0:
-        skip = 3 if clustered_db else 1
-        for _ in range(0, skip):
-            next(ip_gen)
-        ip_range = range(0, n_relays)
-    else:
-        ip_range = range(0, 3 if clustered_db else 1)
-    if enable_ssl:
-        remotes = ["ssl:" + str(next(ip_gen)) + ":6642" for _ in ip_range]
-    else:
-        remotes = ["tcp:" + str(next(ip_gen)) + ":6642" for _ in ip_range]
-    return ','.join(remotes)
-
-
 DEFAULT_N_VIPS = 2
 DEFAULT_VIP_PORT = 80
 
@@ -120,7 +98,6 @@ class ClusterConfig:
     db_inactivity_probe: int = 60000
     node_net: str = "192.16.0.0/16"
     enable_ssl: bool = True
-    node_remote: str = None
     node_timeout_s: int = 20
     internal_net: str = "16.0.0.0/16"
     internal_net6: str = "16::/64"
@@ -132,6 +109,7 @@ class ClusterConfig:
     cluster_net6: str = "16::/32"
     n_workers: int = 2
     n_relays: int = 0
+    n_az: int = 1
     vips: Dict = None
     vips6: Dict = None
     vip_subnet: str = "4.0.0.0/8"
@@ -142,14 +120,6 @@ class ClusterConfig:
 
     def __post_init__(self, **kwargs):
         # Some defaults have to be calculated
-        if not self.node_remote:
-            self.node_remote = calculate_node_remotes(
-                self.node_net,
-                self.clustered_db,
-                self.n_relays,
-                self.enable_ssl,
-            )
-
         if self.vips is None:
             self.vips = calculate_vips(self.vip_subnet)
 

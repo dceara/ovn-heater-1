@@ -14,7 +14,7 @@ from ovn_context import Context
 from ovn_sandbox import PhysicalNode
 from ovn_workload import BrExConfig, ClusterConfig
 from ovn_workload import CentralNode, WorkerNode, Cluster
-from ovn_utils import DualStackSubnet
+from ovn_utils import DualStackSubnet, NodeConf
 from ovs.stream import Stream
 
 
@@ -71,8 +71,8 @@ def read_config(config):
         raft_election_to=cluster_args['raft_election_to'],
         node_net=netaddr.IPNetwork(cluster_args['node_net']),
         n_relays=cluster_args['n_relays'],
+        n_az=cluster_args['n_az'],
         enable_ssl=cluster_args['enable_ssl'],
-        node_remote=cluster_args['node_remote'],
         northd_probe_interval=cluster_args['northd_probe_interval'],
         db_inactivity_probe=cluster_args['db_inactivity_probe'],
         node_timeout_s=cluster_args['node_timeout_s'],
@@ -183,36 +183,76 @@ def configure_tests(yaml, central_node, worker_nodes, global_cfg):
 
 
 def create_nodes(cluster_config, central, workers):
-    mgmt_net = cluster_config.node_net
-    mgmt_ip = mgmt_net.ip + 2
-    internal_net = cluster_config.internal_net
-    external_net = cluster_config.external_net
-    gw_net = cluster_config.gw_net
-    db_containers = (
-        ['ovn-central-1', 'ovn-central-2', 'ovn-central-3']
-        if cluster_config.clustered_db
-        else ['ovn-central']
-    )
-    relay_containers = [
-        f'ovn-relay-{i + 1}' for i in range(cluster_config.n_relays)
+    node_az_conf = [
+        NodeConf(
+            cluster_config.node_net,
+            DualStackSubnet.next(
+                cluster_config.internal_net,
+                i * (cluster_config.n_workers // cluster_config.n_az),
+            ),
+            DualStackSubnet.next(
+                cluster_config.external_net,
+                i * (cluster_config.n_workers // cluster_config.n_az),
+            ),
+            DualStackSubnet.next(
+                cluster_config.gw_net,
+                i * (cluster_config.n_workers // cluster_config.n_az),
+            ),
+        )
+        for i in range(cluster_config.n_az)
     ]
-    central_node = CentralNode(
-        central, db_containers, relay_containers, mgmt_net, mgmt_ip
-    )
-    worker_nodes = [
-        WorkerNode(
-            workers[i % len(workers)],
-            f'ovn-scale-{i}',
-            mgmt_net,
-            mgmt_ip + i,
-            DualStackSubnet.next(internal_net, i),
-            DualStackSubnet.next(external_net, i),
-            gw_net,
+
+    db_containers = [
+        [
+            f'ovn-central-az{i+1}-1',
+            f'ovn-central-az{i+1}-2',
+            f'ovn-central-az{i+1}-3'
+            if cluster_config.clustered_db
+            else f'ovn-central-az{i+1}',
+        ]
+        for i in range(cluster_config.n_az)
+    ]
+
+    relay_containers = [
+        [f'ovn-relay-az{i+1}-{j+1}' for j in range(cluster_config.n_relays)]
+        for i in range(cluster_config.n_az)
+    ]
+
+    central_nodes = [
+        CentralNode(
+            central,
+            db_containers[i],
+            relay_containers[i],
+            node_az_conf[i].mgmt_net,
+            node_az_conf[i].mgmt_net.ip + 2,
+            node_az_conf[i].gw_net),
             i,
         )
-        for i in range(cluster_config.n_workers)
+        for i in range(cluster_config.n_az)
     ]
-    return central_node, worker_nodes
+
+    worker_nodes = [[] for _ in range(cluster_config.n_az)]
+    for i in range(cluster_config.n_workers):
+        az_index = i % cluster_config.n_az
+        wn_index = i // cluster_config.n_az
+        wn = WorkerNode(
+            workers[i % len(workers)],
+            f'ovn-scale-{i}',
+            node_az_conf[az_index].mgmt_net,
+            node_az_conf[az_index].mgmt_net.ip + 2,
+            DualStackSubnet.next(
+                node_az_conf[az_index].int_net,
+                wn_index,
+            ),
+            DualStackSubnet.next(
+                node_az_conf[az_index].ext_net,
+                wn_index,
+            ),
+            node_az_conf[az_index].gw_net,
+            i,
+        )
+        worker_nodes[az_index].append(wn)
+    return central_nodes, worker_nodes
 
 
 def set_ssl_keys(cluster_cfg):
@@ -221,28 +261,38 @@ def set_ssl_keys(cluster_cfg):
     Stream.ssl_set_ca_cert_file(cluster_cfg.ssl_cacert)
 
 
-def prepare_test(central_node, worker_nodes, cluster_cfg, brex_cfg):
+def prepare_test(central_nodes, worker_nodes, cluster_cfg, brex_cfg):
+    clusters = []
     if cluster_cfg.enable_ssl:
         set_ssl_keys(cluster_cfg)
-    ovn = Cluster(central_node, worker_nodes, cluster_cfg, brex_cfg)
-    with Context(ovn, "prepare_test"):
-        ovn.start()
-    return ovn
+    for i in range(0, len(central_nodes)):
+        ovn = Cluster(central_nodes[i], worker_nodes[i], cluster_cfg, brex_cfg)
+        with Context(ovn, f'prepare_test for cluster{i}'):
+            ovn.start()
+        clusters.append(ovn)
+
+    return clusters
 
 
 def run_base_cluster_bringup(ovn, bringup_cfg, global_cfg):
-    # create ovn topology
-    with Context(ovn, "base_cluster_bringup", len(ovn.worker_nodes)) as ctx:
-        ovn.create_cluster_router("lr-cluster")
-        ovn.create_cluster_join_switch("ls-join")
-        ovn.create_cluster_load_balancer("lb-cluster", global_cfg)
-        for i in ctx:
-            worker = ovn.worker_nodes[i]
-            worker.provision(ovn)
-            ports = worker.provision_ports(ovn, bringup_cfg.n_pods_per_node)
-            worker.provision_load_balancers(ovn, ports, global_cfg)
-            worker.ping_ports(ovn, ports)
-        ovn.provision_lb_group()
+    for i in range(0, len(clusters)):
+        ovn = clusters[i]
+        # create ovn topology
+        with Context(
+            ovn, "base_cluster_bringup", len(ovn.worker_nodes)
+        ) as ctx:
+            ovn.create_cluster_router(f'lr-cluster{i}')
+            ovn.create_cluster_join_switch(f'ls-join{i}')
+            ovn.create_cluster_load_balancer(f'lb-cluster{i}', global_cfg)
+            for i in ctx:
+                worker = ovn.worker_nodes[i]
+                worker.provision(ovn)
+                ports = worker.provision_ports(
+                    ovn, bringup_cfg.n_pods_per_node
+                )
+                worker.provision_load_balancers(ovn, ports, global_cfg)
+                worker.ping_ports(ovn, ports)
+            ovn.provision_lb_group(f'cluster-lb-group{i}')
 
 
 if __name__ == '__main__':
@@ -261,11 +311,14 @@ if __name__ == '__main__':
         raise ovn_exceptions.OvnInvalidConfigException()
 
     central, workers = read_physical_deployment(sys.argv[1], global_cfg)
-    central_node, worker_nodes = create_nodes(cluster_cfg, central, workers)
-    tests = configure_tests(config, central_node, worker_nodes, global_cfg)
+    central_nodes, worker_nodes = create_nodes(cluster_cfg, central, workers)
+    tests = configure_tests(
+        config, central_nodes[0], worker_nodes[0], global_cfg
+    )
 
-    ovn = prepare_test(central_node, worker_nodes, cluster_cfg, brex_cfg)
-    run_base_cluster_bringup(ovn, bringup_cfg, global_cfg)
+    clusters = prepare_test(central_nodes, worker_nodes, cluster_cfg, brex_cfg)
+    run_base_cluster_bringup(clusters, bringup_cfg, global_cfg)
+    # FIXME run workloads for all clusters
     for test in tests:
-        test.run(ovn, global_cfg)
+        test.run(clusters[0], global_cfg)
     sys.exit(0)
