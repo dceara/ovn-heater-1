@@ -10,6 +10,7 @@ from collections import namedtuple
 from collections import defaultdict
 from randmac import RandMac
 from datetime import datetime
+from ovn_utils import LSwitch
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ ClusterConfig = namedtuple(
         'internal_net',
         'external_net',
         'gw_net',
+        'ts_net',
         'cluster_net',
         'n_workers',
         'n_relays',
@@ -69,6 +71,7 @@ class CentralNode(Node):
         mgmt_net,
         mgmt_ip,
         gw_net,
+        ts_net,
         az_idx,
     ):
         super(CentralNode, self).__init__(
@@ -78,6 +81,7 @@ class CentralNode(Node):
         self.relay_containers = relay_containers
         self.id = az_idx
         self.gw_net = gw_net
+        self.ts_net = ts_net
 
     def start(self, cluster_cfg):
         log.info('Configuring central node')
@@ -792,6 +796,7 @@ class Cluster:
         self.brex_cfg = brex_cfg
         self.nbctl = None
         self.sbctl = None
+        self.icnbctl = None
         self.net = cluster_cfg.cluster_net
         self.router = None
         self.load_balancer = None
@@ -799,6 +804,7 @@ class Cluster:
         self.join_switch = None
         self.last_selected_worker = 0
         self.n_ns = 0
+        self.ts_switch = None
 
     def start(self):
         self.central_node.start(self.cluster_cfg)
@@ -816,6 +822,14 @@ class Cluster:
         self.sbctl = ovn_utils.OvnSbctl(
             self.central_node, sb_conn, inactivity_probe
         )
+        # ovn-ic configuration
+        if self.cluster_cfg.n_az > 1:
+            self.icnbctl = ovn_utils.OvnIcNbctl(
+                None, f'tcp:{self.central_node.mgmt_ip}:6645', inactivity_probe
+            )
+            self.nbctl.set_global('ic-route-learn', 'true')
+            self.nbctl.set_global('ic-route-adv', 'true')
+
         for w in self.worker_nodes:
             w.start(self.cluster_cfg)
             w.configure(self.brex_cfg.physical_net)
@@ -826,8 +840,49 @@ class Cluster:
         self.nbctl.set_global(
             'northd_probe_interval', self.cluster_cfg.northd_probe_interval
         )
+        self.nbctl.set_global_name(f'az{self.central_node.id + 1}')
         self.nbctl.set_inactivity_probe(self.cluster_cfg.db_inactivity_probe)
         self.sbctl.set_inactivity_probe(self.cluster_cfg.db_inactivity_probe)
+
+    def create_transit_switch(self):
+        self.icnbctl.ts_add()
+
+    def connect_transit_switch(self):
+        uuid = self.nbctl.ls_get_uuid('ts', 10)
+        self.ts_switch = LSwitch(
+            name='ts',
+            cidr=self.central_node.ts_net.n4,
+            cidr6=self.central_node.ts_net.n6,
+            uuid=uuid,
+        )
+        rp = self.nbctl.lr_port_add(
+            self.router,
+            f'lr-cluster{self.central_node.id + 1}-to-ts',
+            RandMac(),
+            self.central_node.ts_net.forward(self.central_node.id + 1),
+        )
+        self.nbctl.ls_port_add(
+            self.ts_switch, f'ts-to-lr-cluster{self.central_node.id + 1}', rp
+        )
+        self.nbctl.lr_port_set_gw_chassis(rp, self.worker_nodes[0].container)
+        self.worker_nodes[0].vsctl.set_global_external_id(
+            'ovn-is-interconn', 'true'
+        )
+
+    def check_ic_connectivity(self, clusters):
+        for i in range(self.cluster_cfg.n_az):
+            if self == clusters[i]:
+                continue
+            for w in clusters[i].worker_nodes:
+                port = w.lports[0]
+                if port.ip:
+                    self.worker_nodes[0].run_ping(
+                        self, self.worker_nodes[0].lports[0].name, port.ip
+                    )
+                if port.ip6:
+                    self.worker_nodes[0].run_ping(
+                        self, self.worker_nodes[0].lports[0].name, port.ip6
+                    )
 
     def create_cluster_router(self, rtr_name):
         self.router = self.nbctl.lr_add(rtr_name)

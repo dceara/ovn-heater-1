@@ -108,6 +108,14 @@ def read_config(config):
             if global_cfg.run_ipv6
             else None,
         ),
+        ts_net=DualStackSubnet(
+            netaddr.IPNetwork(cluster_args['ts_net'])
+            if global_cfg.run_ipv4
+            else None,
+            netaddr.IPNetwork(cluster_args['ts_net6'])
+            if global_cfg.run_ipv6
+            else None,
+        ),
         n_workers=cluster_args['n_workers'],
         vips=cluster_args['vips'],
         vips6=cluster_args['vips6'],
@@ -198,6 +206,7 @@ def create_nodes(cluster_config, central, workers):
                 cluster_config.gw_net,
                 i * (cluster_config.n_workers // cluster_config.n_az),
             ),
+            cluster_config.ts_net,
         )
         for i in range(cluster_config.n_az)
     ]
@@ -225,7 +234,8 @@ def create_nodes(cluster_config, central, workers):
             relay_containers[i],
             node_az_conf[i].mgmt_net,
             node_az_conf[i].mgmt_net.ip + 2,
-            node_az_conf[i].gw_net),
+            node_az_conf[i].gw_net,
+            node_az_conf[i].ts_net,
             i,
         )
         for i in range(cluster_config.n_az)
@@ -275,15 +285,20 @@ def prepare_test(central_nodes, worker_nodes, cluster_cfg, brex_cfg):
 
 
 def run_base_cluster_bringup(ovn, bringup_cfg, global_cfg):
-    for i in range(0, len(clusters)):
+    if clusters[0].cluster_cfg.n_az > 1:
+        clusters[0].create_transit_switch()
+
+    for i in range(clusters[0].cluster_cfg.n_az):
         ovn = clusters[i]
         # create ovn topology
         with Context(
-            ovn, "base_cluster_bringup", len(ovn.worker_nodes)
+            ovn, f'base_cluster_bringup-az{i}', len(ovn.worker_nodes)
         ) as ctx:
-            ovn.create_cluster_router(f'lr-cluster{i}')
-            ovn.create_cluster_join_switch(f'ls-join{i}')
-            ovn.create_cluster_load_balancer(f'lb-cluster{i}', global_cfg)
+            ovn.create_cluster_router(f'lr-cluster{i + 1}')
+            ovn.create_cluster_join_switch(f'ls-join{i + 1}')
+            ovn.create_cluster_load_balancer(f'lb-cluster{i + 1}', global_cfg)
+            if ovn.cluster_cfg.n_az > 1:
+                ovn.connect_transit_switch()
             for i in ctx:
                 worker = ovn.worker_nodes[i]
                 worker.provision(ovn)
@@ -292,7 +307,10 @@ def run_base_cluster_bringup(ovn, bringup_cfg, global_cfg):
                 )
                 worker.provision_load_balancers(ovn, ports, global_cfg)
                 worker.ping_ports(ovn, ports)
-            ovn.provision_lb_group(f'cluster-lb-group{i}')
+            ovn.provision_lb_group(f'cluster-lb-group{i + 1}')
+
+    if clusters[0].cluster_cfg.n_az > 1:
+        clusters[0].check_ic_connectivity(clusters)
 
 
 if __name__ == '__main__':
