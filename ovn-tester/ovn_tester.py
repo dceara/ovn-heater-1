@@ -9,6 +9,7 @@ import ovn_exceptions
 import gc
 import time
 
+from itertools import chain
 from collections import namedtuple
 from ovn_context import Context
 from ovn_sandbox import PhysicalNode
@@ -331,7 +332,10 @@ if __name__ == '__main__':
     central, workers = read_physical_deployment(sys.argv[1], global_cfg)
     central_nodes, worker_nodes = create_nodes(cluster_cfg, central, workers)
     tests = configure_tests(
-        config, central_nodes[0], worker_nodes[0], global_cfg
+        config,
+        central_nodes,
+        list(chain.from_iterable(worker_nodes)),
+        global_cfg,
     )
 
     clusters = prepare_test(central_nodes, worker_nodes, cluster_cfg, brex_cfg)

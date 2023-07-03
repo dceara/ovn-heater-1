@@ -14,7 +14,7 @@ class CentralNodeWrapper(Sandbox):
 
 
 class ExtCmdUnit:
-    def __init__(self, conf, central_node, worker_nodes):
+    def __init__(self, conf, central_nodes, worker_nodes):
         self.iteration = conf.get('iteration')
         self.cmd = conf.get('cmd')
         self.test = conf.get('test')
@@ -24,13 +24,14 @@ class ExtCmdUnit:
 
         node = conf.get('node')
         self.nodes = [n for n in worker_nodes if fnmatch(n.container, node)]
-        self.nodes.extend(
-            [
-                CentralNodeWrapper(central_node, c)
-                for c in central_node.central_containers()
-                if fnmatch(c, node)
-            ]
-        )
+        for central_node in central_nodes:
+            self.nodes.extend(
+                [
+                    CentralNodeWrapper(central_node, c)
+                    for c in central_node.central_containers()
+                    if fnmatch(c, node)
+                ]
+            )
 
     def is_valid(self):
         return (
@@ -60,10 +61,10 @@ class ExtCmdUnit:
 
 
 class ExtCmd:
-    def __init__(self, config, central_node, worker_nodes):
+    def __init__(self, config, central_nodes, worker_nodes):
         self.cmd_map = defaultdict(list)
         for ext_cmd in config.get('ext_cmd', list()):
-            cmd_unit = ExtCmdUnit(ext_cmd, central_node, worker_nodes)
+            cmd_unit = ExtCmdUnit(ext_cmd, central_nodes, worker_nodes)
             if cmd_unit.is_valid():
                 self.cmd_map[(cmd_unit.iteration, cmd_unit.test)].append(
                     cmd_unit
