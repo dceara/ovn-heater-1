@@ -178,7 +178,7 @@ RESERVED = [
 ]
 
 
-def configure_tests(yaml, central_node, worker_nodes, global_cfg):
+def configure_tests(yaml, central_nodes, worker_nodes, global_cfg):
     tests = []
     for section, cfg in yaml.items():
         if section in RESERVED:
@@ -187,7 +187,7 @@ def configure_tests(yaml, central_node, worker_nodes, global_cfg):
         mod = importlib.import_module(f'tests.{section}')
         class_name = ''.join(s.title() for s in section.split('_'))
         cls = getattr(mod, class_name)
-        tests.append(cls(yaml, central_node, worker_nodes, global_cfg))
+        tests.append(cls(yaml, central_nodes, worker_nodes, global_cfg))
     return tests
 
 
@@ -273,35 +273,38 @@ def set_ssl_keys(cluster_cfg):
 
 
 def prepare_test(central_nodes, worker_nodes, cluster_cfg, brex_cfg):
-    clusters = []
     if cluster_cfg.enable_ssl:
         set_ssl_keys(cluster_cfg)
-    for i in range(0, len(central_nodes)):
-        ovn = Cluster(central_nodes[i], worker_nodes[i], cluster_cfg, brex_cfg)
-        with Context(ovn, f'prepare_test for cluster{i}'):
-            ovn.start()
-        clusters.append(ovn)
+
+    clusters = [
+        Cluster(central_nodes[i], worker_nodes[i], cluster_cfg, brex_cfg)
+        for i in range(len(central_nodes))
+    ]
+    with Context(
+        clusters, 'prepare_test for cluster', len(central_nodes)
+    ) as ctx:
+        for i in ctx:
+            clusters[i].start()
 
     return clusters
 
 
-def run_base_cluster_bringup(ovn, bringup_cfg, global_cfg):
+def run_base_cluster_bringup(clusters, bringup_cfg, global_cfg):
     if clusters[0].cluster_cfg.n_az > 1:
         clusters[0].create_transit_switch()
 
-    for i in range(clusters[0].cluster_cfg.n_az):
-        ovn = clusters[i]
-        # create ovn topology
-        with Context(
-            ovn, f'base_cluster_bringup-az{i}', len(ovn.worker_nodes)
-        ) as ctx:
+    with Context(
+        clusters, 'base_cluster_bringup', clusters[0].cluster_cfg.n_az
+    ) as ctx:
+        for i in ctx:
+            # create ovn topology
+            ovn = clusters[i]
             ovn.create_cluster_router(f'lr-cluster{i + 1}')
             ovn.create_cluster_join_switch(f'ls-join{i + 1}')
             ovn.create_cluster_load_balancer(f'lb-cluster{i + 1}', global_cfg)
             if ovn.cluster_cfg.n_az > 1:
                 ovn.connect_transit_switch()
-            for i in ctx:
-                worker = ovn.worker_nodes[i]
+            for worker in ovn.worker_nodes:
                 worker.provision(ovn)
                 ports = worker.provision_ports(
                     ovn, bringup_cfg.n_pods_per_node

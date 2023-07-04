@@ -7,8 +7,10 @@ NpCrossNsCfg = namedtuple('NpCrossNsCfg', ['n_ns', 'pods_ns_ratio'])
 
 
 class NetpolCrossNs(ExtCmd):
-    def __init__(self, config, central_node, worker_nodes, global_cfg):
-        super(NetpolCrossNs, self).__init__(config, central_node, worker_nodes)
+    def __init__(self, config, central_nodes, worker_nodes, global_cfg):
+        super(NetpolCrossNs, self).__init__(
+            config, central_nodes, worker_nodes
+        )
         test_config = config.get('netpol_cross', dict())
         self.config = NpCrossNsCfg(
             n_ns=test_config.get('n_ns', 0),
@@ -18,7 +20,9 @@ class NetpolCrossNs(ExtCmd):
     def run(self, ovn, global_cfg):
         all_ns = []
 
-        with Context(ovn, 'netpol_cross_ns_startup', brief_report=True) as ctx:
+        with Context(
+            [ovn], 'netpol_cross_ns_startup', brief_report=True
+        ) as ctx:
             ports = ovn.provision_ports(
                 self.config.pods_ns_ratio * self.config.n_ns
             )
@@ -40,7 +44,7 @@ class NetpolCrossNs(ExtCmd):
                 all_ns.append(ns)
 
         with Context(
-            ovn, 'netpol_cross_ns', self.config.n_ns, test=self
+            [ovn], 'netpol_cross_ns', self.config.n_ns, test=self
         ) as ctx:
             for i in ctx:
                 ns = all_ns[i]
@@ -53,6 +57,8 @@ class NetpolCrossNs(ExtCmd):
 
         if not global_cfg.cleanup:
             return
-        with Context(ovn, 'netpol_cross_ns_cleanup', brief_report=True) as ctx:
+        with Context(
+            [ovn], 'netpol_cross_ns_cleanup', brief_report=True
+        ) as ctx:
             for ns in all_ns:
                 ns.unprovision()

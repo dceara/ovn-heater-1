@@ -16,8 +16,8 @@ DEFAULT_BACKEND_PORT = 8080
 
 
 class ServiceRoute(ExtCmd):
-    def __init__(self, config, central_node, worker_nodes, global_cfg):
-        super(ServiceRoute, self).__init__(config, central_node, worker_nodes)
+    def __init__(self, config, central_nodes, worker_nodes, global_cfg):
+        super(ServiceRoute, self).__init__(config, central_nodes, worker_nodes)
         test_config = config.get('service_route', dict())
         self.config = ServiceRouteCfg(
             n_lb=test_config.get('n_lb', 16),
@@ -51,7 +51,9 @@ class ServiceRoute(ExtCmd):
 
     def run(self, ovn, global_cfg):
         ns = Namespace(ovn, 'ns_service_route', global_cfg)
-        with Context(ovn, 'service_route', self.config.n_lb, test=self) as ctx:
+        with Context(
+            [ovn], 'service_route', self.config.n_lb, test=self
+        ) as ctx:
             for i in ctx:
                 ports = ovn.provision_ports(self.config.n_backends + 1)
                 ns.add_ports(ports)
@@ -86,5 +88,5 @@ class ServiceRoute(ExtCmd):
 
         if not global_cfg.cleanup:
             return
-        with Context(ovn, 'service_route_cleanup', brief_report=True) as ctx:
+        with Context([ovn], 'service_route_cleanup', brief_report=True) as ctx:
             ns.unprovision()

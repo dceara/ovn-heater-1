@@ -15,9 +15,9 @@ NsMultitenantCfg = namedtuple(
 
 
 class NetpolMultitenant(ExtCmd):
-    def __init__(self, config, central_node, worker_nodes, global_cfg):
+    def __init__(self, config, central_nodes, worker_nodes, global_cfg):
         super(NetpolMultitenant, self).__init__(
-            config, central_node, worker_nodes
+            config, central_nodes, worker_nodes
         )
         test_config = config.get('netpol_multitenant', dict())
         ranges = [
@@ -83,7 +83,7 @@ class NetpolMultitenant(ExtCmd):
 
         all_ns = []
         with Context(
-            ovn, 'netpol_multitenant', self.config.n_namespaces, test=self
+            [ovn], 'netpol_multitenant', self.config.n_namespaces, test=self
         ) as ctx:
             for i in ctx:
                 # Get the number of pods from the "highest" range that
@@ -115,7 +115,7 @@ class NetpolMultitenant(ExtCmd):
         if not global_cfg.cleanup:
             return
         with Context(
-            ovn, 'netpol_multitenant_cleanup', brief_report=True
+            [ovn], 'netpol_multitenant_cleanup', brief_report=True
         ) as ctx:
             for ns in all_ns:
                 ns.unprovision()

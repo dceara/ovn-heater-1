@@ -23,8 +23,8 @@ DEFAULT_BACKEND_PORT = 8080
 
 
 class DensityHeavy(ExtCmd):
-    def __init__(self, config, central_node, worker_nodes, global_cfg):
-        super(DensityHeavy, self).__init__(config, central_node, worker_nodes)
+    def __init__(self, config, central_nodes, worker_nodes, global_cfg):
+        super(DensityHeavy, self).__init__(config, central_nodes, worker_nodes)
         test_config = config.get('density_heavy', dict())
         pods_vip_ratio = test_config.get(
             'pods_vip_ratio', DENSITY_PODS_VIP_RATIO
@@ -71,14 +71,14 @@ class DensityHeavy(ExtCmd):
             return
 
         ns = Namespace(ovn, 'ns_density_heavy', global_cfg)
-        with Context(ovn, 'density_heavy_startup', brief_report=True) as ctx:
+        with Context([ovn], 'density_heavy_startup', brief_report=True) as ctx:
             for i in range(
                 0, self.config.n_startup, self.config.pods_vip_ratio
             ):
                 self.run_iteration(ovn, ns, i, global_cfg, passive=True)
 
         with Context(
-            ovn,
+            [ovn],
             'density_heavy',
             (self.config.n_pods - self.config.n_startup)
             / self.config.pods_vip_ratio,
@@ -90,6 +90,6 @@ class DensityHeavy(ExtCmd):
 
         if not global_cfg.cleanup:
             return
-        with Context(ovn, 'density_heavy_cleanup', brief_report=True) as ctx:
+        with Context([ovn], 'density_heavy_cleanup', brief_report=True) as ctx:
             ovn.unprovision_vips()
             ns.unprovision()

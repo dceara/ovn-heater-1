@@ -17,9 +17,9 @@ ClusterDensityCfg = namedtuple('ClusterDensityCfg', ['n_runs', 'n_startup'])
 
 
 class ClusterDensity(ExtCmd):
-    def __init__(self, config, central_node, worker_nodes, global_cfg):
+    def __init__(self, config, central_nodes, worker_nodes, global_cfg):
         super(ClusterDensity, self).__init__(
-            config, central_node, worker_nodes
+            config, central_nodes, worker_nodes
         )
         test_config = config.get('cluster_density', dict())
         self.config = ClusterDensityCfg(
@@ -60,14 +60,16 @@ class ClusterDensity(ExtCmd):
 
     def run(self, ovn, global_cfg):
         all_ns = []
-        with Context(ovn, 'cluster_density_startup', brief_report=True) as ctx:
+        with Context(
+            [ovn], 'cluster_density_startup', brief_report=True
+        ) as ctx:
             for index in range(self.config.n_startup):
                 all_ns.append(
                     self.run_iteration(ovn, index, global_cfg, passive=True)
                 )
 
         with Context(
-            ovn,
+            [ovn],
             'cluster_density',
             self.config.n_runs - self.config.n_startup,
             test=self,
@@ -80,6 +82,8 @@ class ClusterDensity(ExtCmd):
 
         if not global_cfg.cleanup:
             return
-        with Context(ovn, 'cluster_density_cleanup', brief_report=True) as ctx:
+        with Context(
+            [ovn], 'cluster_density_cleanup', brief_report=True
+        ) as ctx:
             for ns in all_ns:
                 ns.unprovision()

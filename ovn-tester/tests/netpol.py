@@ -8,8 +8,8 @@ NpCfg = namedtuple('NpCfg', ['n_ns', 'n_labels', 'pods_ns_ratio'])
 
 
 class NetPol(ExtCmd):
-    def __init__(self, name, config, central_node, worker_nodes):
-        super(NetPol, self).__init__(config, central_node, worker_nodes)
+    def __init__(self, name, config, central_nodes, worker_nodes):
+        super(NetPol, self).__init__(config, central_nodes, worker_nodes)
         test_config = config.get(name, dict())
         self.config = NpCfg(
             n_ns=test_config.get('n_ns', 0),
@@ -26,7 +26,7 @@ class NetPol(ExtCmd):
         self.ports = []
 
     def init(self, ovn, global_cfg):
-        with Context(ovn, f'{self.name}_startup', brief_report=True) as _:
+        with Context([ovn], f'{self.name}_startup', brief_report=True) as _:
             self.ports = ovn.provision_ports(
                 self.config.pods_ns_ratio * self.config.n_ns
             )
@@ -48,7 +48,7 @@ class NetPol(ExtCmd):
                 self.all_ns.append(ns)
 
     def run(self, ovn, global_cfg, exclude=False):
-        with Context(ovn, self.name, self.config.n_ns, test=self) as ctx:
+        with Context([ovn], self.name, self.config.n_ns, test=self) as ctx:
             for i in ctx:
                 ns = self.all_ns[i]
                 for lbl in range(self.config.n_labels):
@@ -75,6 +75,6 @@ class NetPol(ExtCmd):
 
         if not global_cfg.cleanup:
             return
-        with Context(ovn, f'{self.name}_cleanup', brief_report=True) as ctx:
+        with Context([ovn], f'{self.name}_cleanup', brief_report=True) as ctx:
             for ns in self.all_ns:
                 ns.unprovision()
