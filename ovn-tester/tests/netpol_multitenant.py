@@ -35,7 +35,7 @@ class NetpolMultitenant(ExtCmd):
             ranges=ranges,
         )
 
-    def run(self, ovn, global_cfg):
+    def run(self, clusters, global_cfg):
         """
         Run a multitenant network policy test, for example:
 
@@ -82,15 +82,16 @@ class NetpolMultitenant(ExtCmd):
             ]
 
         all_ns = []
+        ovn = clusters[0]
         with Context(
-            [ovn], 'netpol_multitenant', self.config.n_namespaces, test=self
+            clusters, 'netpol_multitenant', self.config.n_namespaces, test=self
         ) as ctx:
             for i in ctx:
                 # Get the number of pods from the "highest" range that
                 # includes i.
                 ranges = self.config.ranges
                 n_ports = next((r.n_pods for r in ranges if i >= r.start), 1)
-                ns = Namespace(ovn, f'ns_netpol_multitenant_{i}', global_cfg)
+                ns = Namespace([ovn], f'ns_netpol_multitenant_{i}', global_cfg)
                 for _ in range(n_ports):
                     worker = ovn.select_worker_for_port()
                     for p in worker.provision_ports(ovn, 1):
@@ -115,7 +116,7 @@ class NetpolMultitenant(ExtCmd):
         if not global_cfg.cleanup:
             return
         with Context(
-            [ovn], 'netpol_multitenant_cleanup', brief_report=True
+            clusters, 'netpol_multitenant_cleanup', brief_report=True
         ) as ctx:
             for ns in all_ns:
                 ns.unprovision()

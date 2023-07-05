@@ -7,6 +7,6 @@ class NetpolSmall(NetPol):
             'netpol_small', config, central_node, worker_nodes
         )
 
-    def run(self, ovn, global_cfg):
-        self.init(ovn, global_cfg)
-        super(NetpolSmall, self).run(ovn, global_cfg, True)
+    def run(self, clusters, global_cfg):
+        self.init(clusters, global_cfg)
+        super(NetpolSmall, self).run(clusters, global_cfg, True)

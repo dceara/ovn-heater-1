@@ -343,7 +343,6 @@ if __name__ == '__main__':
 
     clusters = prepare_test(central_nodes, worker_nodes, cluster_cfg, brex_cfg)
     run_base_cluster_bringup(clusters, bringup_cfg, global_cfg)
-    # FIXME run workloads for all clusters
     for test in tests:
-        test.run(clusters[0], global_cfg)
+        test.run(clusters, global_cfg)
     sys.exit(0)

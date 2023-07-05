@@ -17,18 +17,19 @@ class NetpolCrossNs(ExtCmd):
             pods_ns_ratio=test_config.get('pods_ns_ratio', 0),
         )
 
-    def run(self, ovn, global_cfg):
+    def run(self, clusters, global_cfg):
         all_ns = []
 
         with Context(
-            [ovn], 'netpol_cross_ns_startup', brief_report=True
+            clusters, 'netpol_cross_ns_startup', brief_report=True
         ) as ctx:
+            ovn = clusters[0]
             ports = ovn.provision_ports(
                 self.config.pods_ns_ratio * self.config.n_ns
             )
             for i in range(self.config.n_ns):
                 ns = Namespace(
-                    ovn, f'NS_netpol_cross_ns_startup_{i}', global_cfg
+                    [ovn], f'NS_netpol_cross_ns_startup_{i}', global_cfg
                 )
                 ns.add_ports(
                     ports[
@@ -44,7 +45,7 @@ class NetpolCrossNs(ExtCmd):
                 all_ns.append(ns)
 
         with Context(
-            [ovn], 'netpol_cross_ns', self.config.n_ns, test=self
+            clusters, 'netpol_cross_ns', self.config.n_ns, test=self
         ) as ctx:
             for i in ctx:
                 ns = all_ns[i]
@@ -58,7 +59,7 @@ class NetpolCrossNs(ExtCmd):
         if not global_cfg.cleanup:
             return
         with Context(
-            [ovn], 'netpol_cross_ns_cleanup', brief_report=True
+            clusters, 'netpol_cross_ns_cleanup', brief_report=True
         ) as ctx:
             for ns in all_ns:
                 ns.unprovision()

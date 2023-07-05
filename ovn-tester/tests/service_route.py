@@ -49,10 +49,11 @@ class ServiceRoute(ExtCmd):
         load_balancer.add_to_routers([node.gw_router.name])
         load_balancer.add_to_switches([node.switch.name])
 
-    def run(self, ovn, global_cfg):
-        ns = Namespace(ovn, 'ns_service_route', global_cfg)
+    def run(self, clusters, global_cfg):
+        ovn = clusters[0]
+        ns = Namespace([ovn], 'ns_service_route', global_cfg)
         with Context(
-            [ovn], 'service_route', self.config.n_lb, test=self
+            clusters, 'service_route', self.config.n_lb, test=self
         ) as ctx:
             for i in ctx:
                 ports = ovn.provision_ports(self.config.n_backends + 1)
@@ -88,5 +89,7 @@ class ServiceRoute(ExtCmd):
 
         if not global_cfg.cleanup:
             return
-        with Context([ovn], 'service_route_cleanup', brief_report=True) as ctx:
+        with Context(
+            clusters, 'service_route_cleanup', brief_report=True
+        ) as ctx:
             ns.unprovision()

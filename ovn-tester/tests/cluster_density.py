@@ -30,7 +30,7 @@ class ClusterDensity(ExtCmd):
             raise ovn_exceptions.OvnInvalidConfigException()
 
     def run_iteration(self, ovn, index, global_cfg, passive):
-        ns = Namespace(ovn, f'NS_density_{index}', global_cfg)
+        ns = Namespace([ovn], f'NS_density_{index}', global_cfg)
         # Create DENSITY_N_BUILD_PODS short lived "build" pods.
         if not passive:
             build_ports = ovn.provision_ports(DENSITY_N_BUILD_PODS, passive)
@@ -58,10 +58,11 @@ class ClusterDensity(ExtCmd):
             ns.unprovision_ports(build_ports)
         return ns
 
-    def run(self, ovn, global_cfg):
+    def run(self, clusters, global_cfg):
+        ovn = clusters[0]
         all_ns = []
         with Context(
-            [ovn], 'cluster_density_startup', brief_report=True
+            clusters, 'cluster_density_startup', brief_report=True
         ) as ctx:
             for index in range(self.config.n_startup):
                 all_ns.append(
@@ -69,7 +70,7 @@ class ClusterDensity(ExtCmd):
                 )
 
         with Context(
-            [ovn],
+            clusters,
             'cluster_density',
             self.config.n_runs - self.config.n_startup,
             test=self,
@@ -83,7 +84,7 @@ class ClusterDensity(ExtCmd):
         if not global_cfg.cleanup:
             return
         with Context(
-            [ovn], 'cluster_density_cleanup', brief_report=True
+            clusters, 'cluster_density_cleanup', brief_report=True
         ) as ctx:
             for ns in all_ns:
                 ns.unprovision()

@@ -25,8 +25,9 @@ class NetPol(ExtCmd):
         self.all_ns = []
         self.ports = []
 
-    def init(self, ovn, global_cfg):
-        with Context([ovn], f'{self.name}_startup', brief_report=True) as _:
+    def init(self, clusters, global_cfg):
+        with Context(clusters, f'{self.name}_startup', brief_report=True) as _:
+            ovn = clusters[0]
             self.ports = ovn.provision_ports(
                 self.config.pods_ns_ratio * self.config.n_ns
             )
@@ -36,7 +37,7 @@ class NetPol(ExtCmd):
                 ).append(self.ports[i])
 
             for i in range(self.config.n_ns):
-                ns = Namespace(ovn, f'NS_{self.name}_{i}', global_cfg)
+                ns = Namespace([ovn], f'NS_{self.name}_{i}', global_cfg)
                 ns.add_ports(
                     self.ports[
                         i
@@ -47,8 +48,9 @@ class NetPol(ExtCmd):
                 ns.default_deny(4)
                 self.all_ns.append(ns)
 
-    def run(self, ovn, global_cfg, exclude=False):
-        with Context([ovn], self.name, self.config.n_ns, test=self) as ctx:
+    def run(self, clusters, global_cfg, exclude=False):
+        ovn = clusters[0]
+        with Context(clusters, self.name, self.config.n_ns, test=self) as ctx:
             for i in ctx:
                 ns = self.all_ns[i]
                 for lbl in range(self.config.n_labels):
@@ -75,6 +77,8 @@ class NetPol(ExtCmd):
 
         if not global_cfg.cleanup:
             return
-        with Context([ovn], f'{self.name}_cleanup', brief_report=True) as ctx:
+        with Context(
+            clusters, f'{self.name}_cleanup', brief_report=True
+        ) as ctx:
             for ns in self.all_ns:
                 ns.unprovision()
