@@ -82,7 +82,6 @@ class NetpolMultitenant(ExtCmd):
             ]
 
         all_ns = []
-        ovn = clusters[0]
         with Context(
             clusters, 'netpol_multitenant', self.config.n_namespaces, test=self
         ) as ctx:
@@ -91,6 +90,7 @@ class NetpolMultitenant(ExtCmd):
                 # includes i.
                 ranges = self.config.ranges
                 n_ports = next((r.n_pods for r in ranges if i >= r.start), 1)
+                ovn = clusters[i % len(clusters)]
                 ns = Namespace([ovn], f'ns_netpol_multitenant_{i}', global_cfg)
                 for _ in range(n_ports):
                     worker = ovn.select_worker_for_port()
