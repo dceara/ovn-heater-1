@@ -529,8 +529,8 @@ class Namespace:
             )
             for nbctl in self.nbctl
         ]
-        self.sub_as = []
-        self.sub_pg = []
+        self.sub_as = [[] for _ in range(len(clusters))]
+        self.sub_pg = [[] for _ in range(len(clusters))]
         self.load_balancer = None
         for cluster in self.clusters:
             cluster.n_ns += 1
@@ -576,11 +576,8 @@ class Namespace:
                 nbctl.address_set_del(self.addr_set4[i])
             if self.addr_set6:
                 nbctl.address_set_del(self.addr_set6[i])
-            # FIXME
-            for pg in self.sub_pg:
-                nbctl.port_group_del(pg)
-            for addr_set in self.sub_as:
-                nbctl.address_set_del(addr_set)
+            nbctl.port_group_del(self.sub_pg[i])
+            nbctl.address_set_del(self.sub_as[i])
 
     def unprovision_ports(self, ports, cluster_id=0):
         '''Unprovision a subset of ports in the namespace without having to
@@ -601,27 +598,24 @@ class Namespace:
             nbctl.port_group_add_ports(self.pg[i], self.ports[i])
 
     def create_sub_ns(self, ports, global_cfg, cluster_id=0):
-        n_sub_pgs = len(self.sub_pg)
+        n_sub_pgs = len(self.sub_pg[cluster_id])
         suffix = f'{self.name}_{n_sub_pgs}'
         pg = self.nbctl[cluster_id].port_group_create(f'sub_pg_{suffix}')
         self.nbctl[cluster_id].port_group_add_ports(pg, ports)
-        self.sub_pg.append(pg)
-        if global_cfg.run_ipv4:
-            addr_set = self.nbctl[cluster_id].address_set_create(
-                f'sub_as_{suffix}'
-            )
-            self.nbctl[cluster_id].address_set_add_addrs(
-                addr_set, [str(p.ip) for p in ports]
-            )
-            self.sub_as.append(addr_set)
-        if global_cfg.run_ipv6:
-            addr_set = self.nbctl[cluster_id].address_set_create(
-                f'sub_as_{suffix}6'
-            )
-            self.nbctl[cluster_id].address_set_add_addrs(
-                addr_set, [str(p.ip6) for p in ports]
-            )
-            self.sub_as.append(addr_set)
+        self.sub_pg[cluster_id].append(pg)
+        for i, nbctl in enumerate(self.nbctl):
+            if global_cfg.run_ipv4:
+                addr_set = nbctl.address_set_create(f'sub_as_{suffix}')
+                nbctl.address_set_add_addrs(
+                    addr_set, [str(p.ip) for p in ports]
+                )
+                self.sub_as[i].append(addr_set)
+            if global_cfg.run_ipv6:
+                addr_set = nbctl.address_set_create(f'sub_as_{suffix}6')
+                nbctl.address_set_add_addrs(
+                    addr_set, [str(p.ip6) for p in ports]
+                )
+                self.sub_as[i].append(addr_set)
         return n_sub_pgs
 
     @ovn_stats.timeit
@@ -720,8 +714,8 @@ class Namespace:
             'to-lport',
             ACL_NETPOL_ALLOW_PRIO,
             'port-group',
-            f'ip{family}.src == \\${self.sub_as[src].name} && '
-            f'outport == @{self.sub_pg[dst].name}',
+            f'ip{family}.src == \\${self.sub_as[cluster_id][src].name} && '
+            f'outport == @{self.sub_pg[cluster_id][dst].name}',
             'allow-related',
         )
         self.nbctl[cluster_id].acl_add(
@@ -729,8 +723,8 @@ class Namespace:
             'to-lport',
             ACL_NETPOL_ALLOW_PRIO,
             'port-group',
-            f'ip{family}.dst == \\${self.sub_as[dst].name} && '
-            f'inport == @{self.sub_pg[src].name}',
+            f'ip{family}.dst == \\${self.sub_as[cluster_id][dst].name} && '
+            f'inport == @{self.sub_pg[cluster_id][src].name}',
             'allow-related',
         )
 
@@ -800,7 +794,6 @@ class Namespace:
         vip_ns_subnet = DEFAULT_NS_VIP_SUBNET
         if version == 6:
             vip_ns_subnet = DEFAULT_NS_VIP_SUBNET6
-        # FIXME
         vip_net = vip_ns_subnet.next(self.clusters[cluster_id].n_ns)
         n_vips = len(self.load_balancer.vips.keys())
         vip_ip = vip_net.ip.__add__(n_vips + 1)
