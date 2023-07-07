@@ -29,7 +29,8 @@ class ClusterDensity(ExtCmd):
         if self.config.n_startup > self.config.n_runs:
             raise ovn_exceptions.OvnInvalidConfigException()
 
-    def run_iteration(self, ovn, index, global_cfg, passive):
+    def run_iteration(self, clusters, index, global_cfg, passive):
+        ovn = clusters[index % len(clusters)]
         ns = Namespace([ovn], f'NS_density_{index}', global_cfg)
         # Create DENSITY_N_BUILD_PODS short lived "build" pods.
         if not passive:
@@ -59,14 +60,15 @@ class ClusterDensity(ExtCmd):
         return ns
 
     def run(self, clusters, global_cfg):
-        ovn = clusters[0]
         all_ns = []
         with Context(
             clusters, 'cluster_density_startup', brief_report=True
         ) as ctx:
             for index in range(self.config.n_startup):
                 all_ns.append(
-                    self.run_iteration(ovn, index, global_cfg, passive=True)
+                    self.run_iteration(
+                        clusters, index, global_cfg, passive=True
+                    )
                 )
 
         with Context(
@@ -78,7 +80,9 @@ class ClusterDensity(ExtCmd):
             for i in ctx:
                 index = self.config.n_startup + i
                 all_ns.append(
-                    self.run_iteration(ovn, index, global_cfg, passive=False)
+                    self.run_iteration(
+                        clusters, index, global_cfg, passive=False
+                    )
                 )
 
         if not global_cfg.cleanup:
