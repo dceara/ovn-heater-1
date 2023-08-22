@@ -72,7 +72,8 @@ class CentralNode(Node):
 
     def start(self, cluster_cfg):
         log.info('Configuring central node')
-        self.set_raft_election_timeout(cluster_cfg.raft_election_to)
+        if cluster_cfg.clustered_db:
+            self.set_raft_election_timeout(cluster_cfg.raft_election_to)
         self.enable_trim_on_compaction()
         self.set_northd_threads(cluster_cfg.northd_threads)
         if cluster_cfg.log_txns_db:
