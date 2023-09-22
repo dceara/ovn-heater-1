@@ -5,6 +5,7 @@ import time
 from collections import defaultdict
 from collections import namedtuple
 from datetime import datetime
+from typing import Optional
 
 import ovn_context
 import ovn_exceptions
@@ -285,10 +286,17 @@ class Cluster:
         self.worker_nodes = []
         self.cluster_cfg = cluster_cfg
         self.brex_cfg = brex_cfg
-        self.nbctl = None
-        self.sbctl = None
-        self.icnbctl = None
+        self.nbctl: Optional[ovn_utils.OvnNbctl] = None
+        self.sbctl: Optional[ovn_utils.OvnSbctl] = None
+        self.icnbctl: Optional[ovn_utils.OvnIcNbctl] = None
         self.az = az
+        self.net = cluster_cfg.cluster_net
+        self.router = None
+        self.load_balancer = None
+        self.load_balancer6 = None
+        self.join_switch = None
+        self.last_selected_worker = 0
+        self.n_ns = 0
 
         protocol = "ssl" if cluster_cfg.enable_ssl else "tcp"
         db_containers = (
