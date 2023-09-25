@@ -233,7 +233,6 @@ def create_nodes(cluster_config, central, workers):
             central,
             db_containers[i],
             relay_containers[i],
-            node_az_conf[i].mgmt_net,
             node_az_conf[i].mgmt_net.ip + 2,
             node_az_conf[i].gw_net,
             node_az_conf[i].ts_net,
@@ -249,7 +248,6 @@ def create_nodes(cluster_config, central, workers):
         wn = WorkerNode(
             workers[i % len(workers)],
             f'ovn-scale-{i}',
-            node_az_conf[az_index].mgmt_net,
             node_az_conf[az_index].mgmt_net.ip + 2,
             DualStackSubnet.next(
                 node_az_conf[az_index].int_net,
