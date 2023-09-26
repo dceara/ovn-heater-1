@@ -41,15 +41,15 @@ def read_physical_deployment(deployment, global_cfg):
     with open(deployment, 'r') as yaml_file:
         dep = yaml.safe_load(yaml_file)
 
-        central_dep = dep['central-node']
-        central_node = PhysicalNode(
-            central_dep.get('name', 'localhost'), global_cfg.log_cmds
-        )
+        central_nodes = [
+            PhysicalNode(central, global_cfg.log_cmds)
+            for central in dep['central-nodes']
+        ]
         worker_nodes = [
             PhysicalNode(worker, global_cfg.log_cmds)
             for worker in dep['worker-nodes']
         ]
-        return central_node, worker_nodes
+        return central_nodes, worker_nodes
 
 
 # SSL files are installed by ovn-fake-multinode in these locations.
@@ -233,8 +233,9 @@ def create_nodes(cluster_config, central, workers):
 
     central_nodes = []
     for i in range(cluster_config.n_az):
+        central_phys_node = centrals[i % len(centrals)]
         central_nodes.append(CentralNode(
-            central,
+            central_phys_node,
             db_containers[i],
             relay_containers[i],
             node_ip,
@@ -342,16 +343,16 @@ if __name__ == '__main__':
     if not global_cfg.run_ipv4 and not global_cfg.run_ipv6:
         raise ovn_exceptions.OvnInvalidConfigException()
 
-    central, workers = read_physical_deployment(sys.argv[1], global_cfg)
-    central_nodes, worker_nodes = create_nodes(cluster_cfg, central, workers)
+    centrals, workers = read_physical_deployment(sys.argv[1], global_cfg)
+    central_nodes, worker_nodes = create_nodes(cluster_cfg, centrals, workers)
+    clusters = prepare_test(central_nodes, worker_nodes, cluster_cfg, brex_cfg)
+
     tests = configure_tests(
         config,
         central_nodes,
         list(chain.from_iterable(worker_nodes)),
         global_cfg,
     )
-
-    clusters = prepare_test(central_nodes, worker_nodes, cluster_cfg, brex_cfg)
     run_base_cluster_bringup(clusters, bringup_cfg, global_cfg)
     for test in tests:
         test.run(clusters, global_cfg)

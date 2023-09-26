@@ -44,8 +44,14 @@ def generate_tester(config, internal_iface):
     )
 
 
-def generate_controller(config, internal_iface):
-    generate_node(config, internal_iface, ovn_central="true")
+def generate_controllers(nodes_config, internal_iface):
+    for node_config in nodes_config:
+        host, node_config = helpers.get_node_config(node_config)
+        iface = node_config.get('internal-iface', internal_iface)
+        generate_node_string(
+            host,
+            internal_iface=iface,
+        )
 
 
 def generate_workers(nodes_config, internal_iface):
@@ -63,14 +69,14 @@ def generate(input_file, target, repo, branch):
         config = yaml.safe_load(yaml_file)
         user = config.get('user', 'root')
         prefix = config.get('prefix', 'ovn-scale')
-        central_config = config['central-node']
+        central_configs = config['central-nodes']
         tester_config = config['tester-node']
         internal_iface = config['internal-iface']
 
         print('[tester_hosts]')
         generate_tester(tester_config, internal_iface)
         print('\n[central_hosts]')
-        generate_controller(central_config, internal_iface)
+        generate_controllers(central_configs, internal_iface)
         print('\n[worker_hosts]')
         generate_workers(config['worker-nodes'], internal_iface)
         print()
