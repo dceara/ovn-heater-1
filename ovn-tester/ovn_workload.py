@@ -55,10 +55,15 @@ BrExConfig = namedtuple('BrExConfig', ['physical_net'])
 
 
 class Node(ovn_sandbox.Sandbox):
-    def __init__(self, phys_node, container, mgmt_ip):
+    def __init__(self, phys_node, container, mgmt_ip, protocol):
         super(Node, self).__init__(phys_node, container)
         self.container = container
         self.mgmt_ip = netaddr.IPAddress(mgmt_ip)
+        self.protocol = protocol
+
+    def get_connection_string(self, num_conns, port):
+        conns = [f"{self.protocol}:{self.mgmt_ip + idx}:{port}" for idx in range(num_conns)]
+        return ",".join(conns)
 
 
 class CentralNode(Node):
@@ -68,12 +73,13 @@ class CentralNode(Node):
         db_containers,
         relay_containers,
         mgmt_ip,
+        protocol,
         gw_net,
         ts_net,
         az_idx,
     ):
         super(CentralNode, self).__init__(
-            phys_node, db_containers[0], mgmt_ip
+            phys_node, db_containers[0], mgmt_ip, protocol
         )
         self.db_containers = db_containers
         self.relay_containers = relay_containers
@@ -153,13 +159,8 @@ class CentralNode(Node):
             'vlog/disable-rate-limit transaction'
         )
 
-    def get_connection_string(self, cluster_cfg, port):
-        protocol = "ssl" if cluster_cfg.enable_ssl else "tcp"
-        off = 3 * self.id if cluster_cfg.clustered_db else self.id
-        ip = self.mgmt_ip + off
-        num_conns = 3 if cluster_cfg.clustered_db else 1
-        conns = [f"{protocol}:{ip + idx}:{port}" for idx in range(num_conns)]
-        return ",".join(conns)
+    def get_connection_string(self, port):
+        return super().get_connection_string(len(self.db_containers), port)
 
     def central_containers(self):
         return self.db_containers
@@ -171,13 +172,14 @@ class WorkerNode(Node):
         phys_node,
         container,
         mgmt_ip,
+        protocol,
         int_net,
         ext_net,
         gw_net,
         unique_id,
     ):
         super(WorkerNode, self).__init__(
-            phys_node, container, mgmt_ip
+            phys_node, container, mgmt_ip, protocol
         )
         self.int_net = int_net
         self.ext_net = ext_net
@@ -193,7 +195,7 @@ class WorkerNode(Node):
     def start(self, cluster_cfg):
         self.vsctl = ovn_utils.OvsVsctl(
             self,
-            self.get_connection_string(cluster_cfg, 6640),
+            self.get_connection_string(6640),
             cluster_cfg.db_inactivity_probe // 1000,
         )
 
@@ -473,15 +475,8 @@ class WorkerNode(Node):
             if port.ip6:
                 self.ping_port(cluster, port, dest=port.ext_gw6)
 
-    def get_connection_string(self, cluster_cfg, port):
-        protocol = "ssl" if cluster_cfg.enable_ssl else "tcp"
-        offset = cluster_cfg.n_az
-        if cluster_cfg.clustered_db:
-            offset *= 3
-        if cluster_cfg.n_relays > 0:
-            offset += cluster_cfg.n_relays * cluster_cfg.n_az
-        offset += self.id
-        return f"{protocol}:{self.mgmt_ip + offset}:{port}"
+    def get_connection_string(self, port):
+        return super().get_connection_string(1, port)
 
 
 ACL_DEFAULT_DENY_PRIO = 1
@@ -814,8 +809,9 @@ class Namespace:
 
 
 class Cluster:
-    def __init__(self, central_node, worker_nodes, cluster_cfg, brex_cfg):
+    def __init__(self, ic_remote_ip, central_node, worker_nodes, cluster_cfg, brex_cfg):
         # In clustered mode use the first node for provisioning.
+        self.ic_remote_ip = ic_remote_ip
         self.central_node = central_node
         self.worker_nodes = worker_nodes
         self.cluster_cfg = cluster_cfg
@@ -834,24 +830,20 @@ class Cluster:
 
     def start(self):
         self.central_node.start(self.cluster_cfg)
-        nb_conn = self.central_node.get_connection_string(
-            self.cluster_cfg, 6641
-        )
+        nb_conn = self.central_node.get_connection_string(6641)
         inactivity_probe = self.cluster_cfg.db_inactivity_probe // 1000
         self.nbctl = ovn_utils.OvnNbctl(
             self.central_node, nb_conn, inactivity_probe
         )
 
-        sb_conn = self.central_node.get_connection_string(
-            self.cluster_cfg, 6642
-        )
+        sb_conn = self.central_node.get_connection_string(6642)
         self.sbctl = ovn_utils.OvnSbctl(
             self.central_node, sb_conn, inactivity_probe
         )
         # ovn-ic configuration
         if self.cluster_cfg.n_az > 1:
             self.icnbctl = ovn_utils.OvnIcNbctl(
-                None, f'tcp:{self.central_node.mgmt_ip}:6645', inactivity_probe
+                None, f'tcp:{self.ic_remote_ip}:6645', inactivity_probe
             )
             self.nbctl.set_global('ic-route-learn', 'true')
             self.nbctl.set_global('ic-route-adv', 'true')

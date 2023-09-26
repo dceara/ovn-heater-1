@@ -192,6 +192,7 @@ def configure_tests(yaml, central_nodes, worker_nodes, global_cfg):
 
 
 def create_nodes(cluster_config, central, workers):
+    protocol = "ssl" if cluster_cfg.enable_ssl else "tcp"
     node_az_conf = [
         NodeConf(
             cluster_config.node_net,
@@ -228,18 +229,25 @@ def create_nodes(cluster_config, central, workers):
         for i in range(cluster_config.n_az)
     ]
 
-    central_nodes = [
-        CentralNode(
+    node_ip = cluster_config.node_net.ip + 2
+
+    central_nodes = []
+    for i in range(cluster_config.n_az):
+        central_nodes.append(CentralNode(
             central,
             db_containers[i],
             relay_containers[i],
-            node_az_conf[i].mgmt_net.ip + 2,
+            node_ip,
+            protocol,
             node_az_conf[i].gw_net,
             node_az_conf[i].ts_net,
             i,
-        )
-        for i in range(cluster_config.n_az)
-    ]
+        ))
+        # Skip 3 central nodes for clustered DBs.
+        node_ip += 3 if cluster_config.clustered_db else 1
+
+    # Skip relays.
+    node_ip += cluster_config.n_az * cluster_config.n_relays
 
     worker_nodes = [[] for _ in range(cluster_config.n_az)]
     for i in range(cluster_config.n_workers):
@@ -248,7 +256,8 @@ def create_nodes(cluster_config, central, workers):
         wn = WorkerNode(
             workers[i % len(workers)],
             f'ovn-scale-{i}',
-            node_az_conf[az_index].mgmt_net.ip + 2,
+            node_ip,
+            protocol,
             DualStackSubnet.next(
                 node_az_conf[az_index].int_net,
                 wn_index,
@@ -261,6 +270,7 @@ def create_nodes(cluster_config, central, workers):
             i,
         )
         worker_nodes[az_index].append(wn)
+        node_ip += 1
     return central_nodes, worker_nodes
 
 
@@ -274,8 +284,10 @@ def prepare_test(central_nodes, worker_nodes, cluster_cfg, brex_cfg):
     if cluster_cfg.enable_ssl:
         set_ssl_keys(cluster_cfg)
 
+    ic_remote_ip = central_nodes[0].mgmt_ip
+
     clusters = [
-        Cluster(central_nodes[i], worker_nodes[i], cluster_cfg, brex_cfg)
+        Cluster(ic_remote_ip, central_nodes[i], worker_nodes[i], cluster_cfg, brex_cfg)
         for i in range(len(central_nodes))
     ]
     with Context(
