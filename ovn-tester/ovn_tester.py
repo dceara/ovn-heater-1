@@ -215,11 +215,11 @@ def create_nodes(cluster_config, central, workers):
 
     db_containers = [
         [
-            f'ovn-central-az{i+1}-1',
-            f'ovn-central-az{i+1}-2',
-            f'ovn-central-az{i+1}-3'
+            f'ovn-central-az{i}-1',
+            f'ovn-central-az{i}-2',
+            f'ovn-central-az{i}-3'
             if cluster_config.clustered_db
-            else f'ovn-central-az{i+1}',
+            else f'ovn-central-az{i}',
         ]
         for i in range(cluster_config.n_az)
     ]
@@ -247,8 +247,8 @@ def create_nodes(cluster_config, central, workers):
         # Skip 3 central nodes for clustered DBs.
         node_ip += 3 if cluster_config.clustered_db else 1
 
-    # Skip relays.
-    node_ip += cluster_config.n_az * cluster_config.n_relays
+        # Skip relays.
+        node_ip += cluster_config.n_relays
 
     worker_nodes = [[] for _ in range(cluster_config.n_az)]
     for i in range(cluster_config.n_workers):

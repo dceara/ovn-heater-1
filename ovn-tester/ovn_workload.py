@@ -200,7 +200,7 @@ class WorkerNode(Node):
         )
 
     def calculate_node_remotes(
-        self, node_net, clustered_db, enable_ssl, offset
+        self, node_net, clustered_db, enable_ssl, n_relays, offset
     ):
         net = netaddr.IPNetwork(node_net)
 
@@ -208,6 +208,8 @@ class WorkerNode(Node):
         # The first IP is assigned to the tester, skip it.
         next(ip_gen)
         skip = 3 * offset if clustered_db else offset
+        # Skip relays too.
+        skip += n_relays
         for _ in range(0, skip):
             next(ip_gen)
         ip_range = range(offset, offset + 3 if clustered_db else offset + 1)
@@ -223,6 +225,7 @@ class WorkerNode(Node):
             cluster_cfg.node_net,
             cluster_cfg.clustered_db,
             cluster_cfg.enable_ssl,
+            cluster_cfg.n_relays,
             self.id % cluster_cfg.n_az,
         )
 
