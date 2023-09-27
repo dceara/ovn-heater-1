@@ -71,7 +71,6 @@ class CentralNode(Node):
         self,
         phys_node,
         db_containers,
-        relay_containers,
         mgmt_ip,
         protocol,
         gw_net,
@@ -82,7 +81,6 @@ class CentralNode(Node):
             phys_node, db_containers[0], mgmt_ip, protocol
         )
         self.db_containers = db_containers
-        self.relay_containers = relay_containers
         self.id = az_idx
         self.gw_net = gw_net
         self.ts_net = ts_net
@@ -133,12 +131,6 @@ class CentralNode(Node):
                 f'/run/ovn/ovnsb_db.ctl '
                 f'ovsdb-server/memory-trim-on-compaction on'
             )
-        for relay_container in self.relay_containers:
-            self.phys_node.run(
-                f'podman exec {relay_container} ovs-appctl -t '
-                f'/run/ovn/ovnsb_db.ctl '
-                f'ovsdb-server/memory-trim-on-compaction on'
-            )
 
     def enable_txns_db_logging(self):
         log.info('Enable DB txn logging')
@@ -165,6 +157,25 @@ class CentralNode(Node):
     def central_containers(self):
         return self.db_containers
 
+
+class RelayNode(Node):
+    def __init__(self, phys_node, container, mgmt_ip, protocol):
+        super().__init__(phys_node, container, mgmt_ip, protocol)
+
+    def start(self):
+        log.info(f'Configuring relay node {self.container}')
+        self.enable_trim_on_compaction()
+
+    def get_connection_string(self, port):
+        return super().get_connection_string(1, port)
+
+    def enable_trim_on_compaction(self):
+        log.info('Setting DB trim-on-compaction')
+        self.phys_node.run(
+            f'podman exec {self.container} ovs-appctl -t '
+            f'/run/ovn/ovnsb_db.ctl '
+            f'ovsdb-server/memory-trim-on-compaction on'
+        )
 
 class WorkerNode(Node):
     def __init__(
@@ -199,36 +210,8 @@ class WorkerNode(Node):
             cluster_cfg.db_inactivity_probe // 1000,
         )
 
-    def calculate_node_remotes(
-        self, node_net, clustered_db, enable_ssl, n_relays, offset
-    ):
-        net = netaddr.IPNetwork(node_net)
-
-        ip_gen = net.iter_hosts()
-        # The first IP is assigned to the tester, skip it.
-        next(ip_gen)
-        skip = 3 * offset if clustered_db else offset
-        # Skip relays too.
-        skip += n_relays
-        for _ in range(0, skip):
-            next(ip_gen)
-        ip_range = range(offset, offset + 3 if clustered_db else offset + 1)
-        if enable_ssl:
-            remotes = ["ssl:" + str(next(ip_gen)) + ":6642" for _ in ip_range]
-        else:
-            remotes = ["tcp:" + str(next(ip_gen)) + ":6642" for _ in ip_range]
-        return ','.join(remotes)
-
     @ovn_stats.timeit
-    def connect(self, cluster_cfg):
-        remote = self.calculate_node_remotes(
-            cluster_cfg.node_net,
-            cluster_cfg.clustered_db,
-            cluster_cfg.enable_ssl,
-            cluster_cfg.n_relays,
-            self.id % cluster_cfg.n_az,
-        )
-
+    def connect(self, remote):
         log.info(
             f'Connecting worker {self.container}: ' f'ovn-remote = {remote}'
         )
@@ -257,7 +240,7 @@ class WorkerNode(Node):
 
     @ovn_stats.timeit
     def provision(self, cluster):
-        self.connect(cluster.cluster_cfg)
+        self.connect(cluster.get_sb_connection_string())
         self.wait(cluster.sbctl, cluster.cluster_cfg.node_timeout_s)
 
         # Create a node switch and connect it to the cluster router.
@@ -812,10 +795,11 @@ class Namespace:
 
 
 class Cluster:
-    def __init__(self, ic_remote_ip, central_node, worker_nodes, cluster_cfg, brex_cfg):
+    def __init__(self, ic_remote_ip, central_node, relay_nodes, worker_nodes, cluster_cfg, brex_cfg):
         # In clustered mode use the first node for provisioning.
         self.ic_remote_ip = ic_remote_ip
         self.central_node = central_node
+        self.relay_nodes = relay_nodes
         self.worker_nodes = worker_nodes
         self.cluster_cfg = cluster_cfg
         self.brex_cfg = brex_cfg
@@ -851,6 +835,9 @@ class Cluster:
             self.nbctl.set_global('ic-route-learn', 'true')
             self.nbctl.set_global('ic-route-adv', 'true')
 
+        for r in self.relay_nodes:
+            r.start()
+
         for w in self.worker_nodes:
             w.start(self.cluster_cfg)
             w.configure(self.brex_cfg.physical_net)
@@ -864,6 +851,11 @@ class Cluster:
         self.nbctl.set_global_name(f'az{self.central_node.id + 1}')
         self.nbctl.set_inactivity_probe(self.cluster_cfg.db_inactivity_probe)
         self.sbctl.set_inactivity_probe(self.cluster_cfg.db_inactivity_probe)
+
+    def get_sb_connection_string(self):
+        if len(self.relay_nodes) > 0:
+            return ','.join([db.get_connection_string(6642) for db in self.relay_nodes])
+        return self.central_node.get_connection_string(6642)
 
     def create_transit_switch(self):
         self.icnbctl.ts_add()

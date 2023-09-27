@@ -14,7 +14,7 @@ from collections import namedtuple
 from ovn_context import Context
 from ovn_sandbox import PhysicalNode
 from ovn_workload import BrExConfig, ClusterConfig
-from ovn_workload import CentralNode, WorkerNode, Cluster
+from ovn_workload import CentralNode, RelayNode, WorkerNode, Cluster
 from ovn_utils import DualStackSubnet, NodeConf
 from ovs.stream import Stream
 
@@ -224,31 +224,30 @@ def create_nodes(cluster_config, central, workers):
         for i in range(cluster_config.n_az)
     ]
 
-    relay_containers = [
-        [f'ovn-relay-az{i+1}-{j+1}' for j in range(cluster_config.n_relays)]
-        for i in range(cluster_config.n_az)
-    ]
-
     node_ip = cluster_config.node_net.ip + 2
 
     central_nodes = []
-    for i in range(cluster_config.n_az):
-        central_phys_node = centrals[i % len(centrals)]
+    relay_nodes = [[] for _ in range(cluster_config.n_az)]
+    for az in range(cluster_config.n_az):
+        central_phys_node = centrals[az % len(centrals)]
         central_nodes.append(CentralNode(
             central_phys_node,
-            db_containers[i],
-            relay_containers[i],
+            db_containers[az],
             node_ip,
             protocol,
-            node_az_conf[i].gw_net,
-            node_az_conf[i].ts_net,
-            i,
+            node_az_conf[az].gw_net,
+            node_az_conf[az].ts_net,
+            az,
         ))
         # Skip 3 central nodes for clustered DBs.
         node_ip += 3 if cluster_config.clustered_db else 1
 
-        # Skip relays.
-        node_ip += cluster_config.n_relays
+        # Add relays.
+        for i in range(cluster_config.n_relays):
+            relay_nodes[az].append(RelayNode(central_phys_node,
+                                             f'ovn-central-az{az}-relay-{i}',
+                                             node_ip, protocol))
+            node_ip += 1
 
     worker_nodes = [[] for _ in range(cluster_config.n_az)]
     for i in range(cluster_config.n_workers):
@@ -272,7 +271,7 @@ def create_nodes(cluster_config, central, workers):
         )
         worker_nodes[az_index].append(wn)
         node_ip += 1
-    return central_nodes, worker_nodes
+    return central_nodes, relay_nodes, worker_nodes
 
 
 def set_ssl_keys(cluster_cfg):
@@ -281,14 +280,14 @@ def set_ssl_keys(cluster_cfg):
     Stream.ssl_set_ca_cert_file(cluster_cfg.ssl_cacert)
 
 
-def prepare_test(central_nodes, worker_nodes, cluster_cfg, brex_cfg):
+def prepare_test(central_nodes, relay_nodes, worker_nodes, cluster_cfg, brex_cfg):
     if cluster_cfg.enable_ssl:
         set_ssl_keys(cluster_cfg)
 
     ic_remote_ip = central_nodes[0].mgmt_ip
 
     clusters = [
-        Cluster(ic_remote_ip, central_nodes[i], worker_nodes[i], cluster_cfg, brex_cfg)
+        Cluster(ic_remote_ip, central_nodes[i], relay_nodes[i], worker_nodes[i], cluster_cfg, brex_cfg)
         for i in range(len(central_nodes))
     ]
     with Context(
@@ -344,8 +343,8 @@ if __name__ == '__main__':
         raise ovn_exceptions.OvnInvalidConfigException()
 
     centrals, workers = read_physical_deployment(sys.argv[1], global_cfg)
-    central_nodes, worker_nodes = create_nodes(cluster_cfg, centrals, workers)
-    clusters = prepare_test(central_nodes, worker_nodes, cluster_cfg, brex_cfg)
+    central_nodes, relay_nodes, worker_nodes = create_nodes(cluster_cfg, centrals, workers)
+    clusters = prepare_test(central_nodes, relay_nodes, worker_nodes, cluster_cfg, brex_cfg)
 
     tests = configure_tests(
         config,
