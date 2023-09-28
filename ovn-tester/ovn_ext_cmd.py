@@ -4,15 +4,6 @@ from io import StringIO
 from ovn_sandbox import Sandbox
 
 
-# The wrapper allows us to execute the command on all
-# matching central containers
-class CentralNodeWrapper(Sandbox):
-    def __init__(self, central_node, container):
-        super(CentralNodeWrapper, self).__init__(
-            central_node.phys_node, container
-        )
-
-
 class ExtCmdUnit:
     def __init__(self, conf, central_nodes, worker_nodes):
         self.iteration = conf.get('iteration')
@@ -24,14 +15,7 @@ class ExtCmdUnit:
 
         node = conf.get('node')
         self.nodes = [n for n in worker_nodes if fnmatch(n.container, node)]
-        for central_node in central_nodes:
-            self.nodes.extend(
-                [
-                    CentralNodeWrapper(central_node, c)
-                    for c in central_node.central_containers()
-                    if fnmatch(c, node)
-                ]
-            )
+        self.nodes.extend([n for n in central_nodes_nodes if fnmatch(n.container, node)])
 
     def is_valid(self):
         return (

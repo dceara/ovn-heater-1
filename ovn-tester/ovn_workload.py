@@ -61,33 +61,25 @@ class Node(ovn_sandbox.Sandbox):
         self.mgmt_ip = netaddr.IPAddress(mgmt_ip)
         self.protocol = protocol
 
-    def get_connection_string(self, num_conns, port):
-        conns = [f"{self.protocol}:{self.mgmt_ip + idx}:{port}" for idx in range(num_conns)]
-        return ",".join(conns)
+    def get_connection_string(self, port):
+        return f'{self.protocol}:{self.mgmt_ip}:{port}'
 
 
 class CentralNode(Node):
     def __init__(
         self,
         phys_node,
-        db_containers,
+        container,
         mgmt_ip,
         protocol,
-        gw_net,
-        ts_net,
-        az_idx,
     ):
         super(CentralNode, self).__init__(
-            phys_node, db_containers[0], mgmt_ip, protocol
+            phys_node, container, mgmt_ip, protocol
         )
-        self.db_containers = db_containers
-        self.id = az_idx
-        self.gw_net = gw_net
-        self.ts_net = ts_net
 
-    def start(self, cluster_cfg):
+    def start(self, cluster_cfg, update_election_timeout=False):
         log.info('Configuring central node')
-        if cluster_cfg.clustered_db:
+        if cluster_cfg.clustered_db and update_election_timeout:
             self.set_raft_election_timeout(cluster_cfg.raft_election_to)
         self.enable_trim_on_compaction()
         self.set_northd_threads(cluster_cfg.northd_threads)
@@ -96,12 +88,11 @@ class CentralNode(Node):
 
     def set_northd_threads(self, n_threads):
         log.info(f'Configuring northd to use {n_threads} threads')
-        for container in self.db_containers:
-            self.phys_node.run(
-                f'podman exec {container} ovn-appctl -t '
-                f'ovn-northd parallel-build/set-n-threads '
-                f'{n_threads}'
-            )
+        self.phys_node.run(
+            f'podman exec {self.container} ovn-appctl -t '
+            f'ovn-northd parallel-build/set-n-threads '
+            f'{n_threads}'
+        )
 
     def set_raft_election_timeout(self, timeout_s):
         for timeout in range(1000, (timeout_s + 1) * 1000, 1000):
@@ -120,17 +111,16 @@ class CentralNode(Node):
 
     def enable_trim_on_compaction(self):
         log.info('Setting DB trim-on-compaction')
-        for db_container in self.db_containers:
-            self.phys_node.run(
-                f'podman exec {db_container} ovs-appctl -t '
-                f'/run/ovn/ovnnb_db.ctl '
-                f'ovsdb-server/memory-trim-on-compaction on'
-            )
-            self.phys_node.run(
-                f'podman exec {db_container} ovs-appctl -t '
-                f'/run/ovn/ovnsb_db.ctl '
-                f'ovsdb-server/memory-trim-on-compaction on'
-            )
+        self.phys_node.run(
+            f'podman exec {self.container} ovs-appctl -t '
+            f'/run/ovn/ovnnb_db.ctl '
+            f'ovsdb-server/memory-trim-on-compaction on'
+        )
+        self.phys_node.run(
+            f'podman exec {self.container} ovs-appctl -t '
+            f'/run/ovn/ovnsb_db.ctl '
+            f'ovsdb-server/memory-trim-on-compaction on'
+        )
 
     def enable_txns_db_logging(self):
         log.info('Enable DB txn logging')
@@ -151,12 +141,6 @@ class CentralNode(Node):
             'vlog/disable-rate-limit transaction'
         )
 
-    def get_connection_string(self, port):
-        return super().get_connection_string(len(self.db_containers), port)
-
-    def central_containers(self):
-        return self.db_containers
-
 
 class RelayNode(Node):
     def __init__(self, phys_node, container, mgmt_ip, protocol):
@@ -165,9 +149,6 @@ class RelayNode(Node):
     def start(self):
         log.info(f'Configuring relay node {self.container}')
         self.enable_trim_on_compaction()
-
-    def get_connection_string(self, port):
-        return super().get_connection_string(1, port)
 
     def enable_trim_on_compaction(self):
         log.info('Setting DB trim-on-compaction')
@@ -240,7 +221,7 @@ class WorkerNode(Node):
 
     @ovn_stats.timeit
     def provision(self, cluster):
-        self.connect(cluster.get_sb_connection_string())
+        self.connect(cluster.get_relay_connection_string())
         self.wait(cluster.sbctl, cluster.cluster_cfg.node_timeout_s)
 
         # Create a node switch and connect it to the cluster router.
@@ -309,7 +290,7 @@ class WorkerNode(Node):
 
         # Route for traffic entering the cluster.
         cluster.nbctl.route_add(
-            self.gw_router, cluster.net, self.gw_net.reverse()
+            self.gw_router, cluster.cluster_net, self.gw_net.reverse()
         )
 
         # Default route to get out of cluster via physnet.
@@ -328,7 +309,7 @@ class WorkerNode(Node):
         )
 
         # SNAT traffic leaving the cluster.
-        cluster.nbctl.nat_add(self.gw_router, gr_gw, cluster.net)
+        cluster.nbctl.nat_add(self.gw_router, gr_gw, cluster.cluster_net)
 
     @ovn_stats.timeit
     def provision_port(self, cluster, passive=False):
@@ -461,8 +442,6 @@ class WorkerNode(Node):
             if port.ip6:
                 self.ping_port(cluster, port, dest=port.ext_gw6)
 
-    def get_connection_string(self, port):
-        return super().get_connection_string(1, port)
 
 
 ACL_DEFAULT_DENY_PRIO = 1
@@ -795,18 +774,21 @@ class Namespace:
 
 
 class Cluster:
-    def __init__(self, ic_remote_ip, central_node, relay_nodes, worker_nodes, cluster_cfg, brex_cfg):
+    def __init__(self, ic_remote_ip, central_nodes, relay_nodes, cluster_net, gw_net, ts_net, az, cluster_cfg, brex_cfg):
         # In clustered mode use the first node for provisioning.
         self.ic_remote_ip = ic_remote_ip
-        self.central_node = central_node
+        self.central_nodes = central_nodes
         self.relay_nodes = relay_nodes
-        self.worker_nodes = worker_nodes
+        self.worker_nodes = []
         self.cluster_cfg = cluster_cfg
         self.brex_cfg = brex_cfg
         self.nbctl = None
         self.sbctl = None
         self.icnbctl = None
-        self.net = cluster_cfg.cluster_net
+        self.cluster_net = cluster_net
+        self.gw_net = gw_net
+        self.ts_net = ts_net
+        self.az = az
         self.router = None
         self.load_balancer = None
         self.load_balancer6 = None
@@ -815,25 +797,27 @@ class Cluster:
         self.n_ns = 0
         self.ts_switch = None
 
+    def append_worker(self, worker_node):
+        self.worker_nodes.append(worker_node)
+
     def start(self):
-        self.central_node.start(self.cluster_cfg)
-        nb_conn = self.central_node.get_connection_string(6641)
+        for c in self.central_nodes:
+            c.start(self.cluster_cfg, update_election_timeout=(c is self.central_nodes[0]))
+        nb_conn = self.get_nb_connection_string()
         inactivity_probe = self.cluster_cfg.db_inactivity_probe // 1000
         self.nbctl = ovn_utils.OvnNbctl(
-            self.central_node, nb_conn, inactivity_probe
+            self.central_nodes[0], nb_conn, inactivity_probe
         )
 
-        sb_conn = self.central_node.get_connection_string(6642)
+        sb_conn = self.get_sb_connection_string()
         self.sbctl = ovn_utils.OvnSbctl(
-            self.central_node, sb_conn, inactivity_probe
+            self.central_nodes[0], sb_conn, inactivity_probe
         )
-        # ovn-ic configuration
-        if self.cluster_cfg.n_az > 1:
-            self.icnbctl = ovn_utils.OvnIcNbctl(
-                None, f'tcp:{self.ic_remote_ip}:6645', inactivity_probe
-            )
-            self.nbctl.set_global('ic-route-learn', 'true')
-            self.nbctl.set_global('ic-route-adv', 'true')
+
+        ic_conn = self.get_ic_connection_string()
+        self.icnbctl = ovn_utils.OvnIcNbctl(
+            None, ic_conn, inactivity_probe
+        )
 
         for r in self.relay_nodes:
             r.start()
@@ -842,20 +826,31 @@ class Cluster:
             w.start(self.cluster_cfg)
             w.configure(self.brex_cfg.physical_net)
 
+        self.nbctl.set_global('ic-route-learn', 'true')
+        self.nbctl.set_global('ic-route-adv', 'true')
         self.nbctl.set_global(
             'use_logical_dp_groups', self.cluster_cfg.logical_dp_groups
         )
         self.nbctl.set_global(
             'northd_probe_interval', self.cluster_cfg.northd_probe_interval
         )
-        self.nbctl.set_global_name(f'az{self.central_node.id + 1}')
+        self.nbctl.set_global_name(f'az{self.az}')
         self.nbctl.set_inactivity_probe(self.cluster_cfg.db_inactivity_probe)
         self.sbctl.set_inactivity_probe(self.cluster_cfg.db_inactivity_probe)
 
+    def get_nb_connection_string(self):
+        return ','.join([db.get_connection_string(6641) for db in self.central_nodes])
+
     def get_sb_connection_string(self):
+        return ','.join([db.get_connection_string(6642) for db in self.central_nodes])
+
+    def get_relay_connection_string(self):
         if len(self.relay_nodes) > 0:
             return ','.join([db.get_connection_string(6642) for db in self.relay_nodes])
-        return self.central_node.get_connection_string(6642)
+        return self.get_sb_connection_string()
+
+    def get_ic_connection_string(self):
+        return f'tcp:{self.ic_remote_ip}:6645'
 
     def create_transit_switch(self):
         self.icnbctl.ts_add()
@@ -864,18 +859,18 @@ class Cluster:
         uuid = self.nbctl.ls_get_uuid('ts', 10)
         self.ts_switch = LSwitch(
             name='ts',
-            cidr=self.central_node.ts_net.n4,
-            cidr6=self.central_node.ts_net.n6,
+            cidr=self.ts_net.n4,
+            cidr6=self.ts_net.n6,
             uuid=uuid,
         )
         rp = self.nbctl.lr_port_add(
             self.router,
-            f'lr-cluster{self.central_node.id + 1}-to-ts',
+            f'lr-cluster{self.az}-to-ts',
             RandMac(),
-            self.central_node.ts_net.forward(self.central_node.id + 1),
+            self.ts_net.forward(self.az),
         )
         self.nbctl.ls_port_add(
-            self.ts_switch, f'ts-to-lr-cluster{self.central_node.id + 1}', rp
+            self.ts_switch, f'ts-to-lr-cluster{self.az}', rp
         )
         self.nbctl.lr_port_set_gw_chassis(rp, self.worker_nodes[0].container)
         self.worker_nodes[0].vsctl.set_global_external_id(
@@ -921,14 +916,14 @@ class Cluster:
 
     def create_cluster_join_switch(self, sw_name):
         self.join_switch = self.nbctl.ls_add(
-            sw_name, net_s=self.central_node.gw_net
+            sw_name, net_s=self.gw_net
         )
 
         self.join_rp = self.nbctl.lr_port_add(
             self.router,
             f'rtr-to-{sw_name}',
             RandMac(),
-            self.central_node.gw_net.reverse(),
+            self.gw_net.reverse(),
         )
         self.join_ls_rp = self.nbctl.ls_port_add(
             self.join_switch, f'{sw_name}-to-rtr', self.join_rp

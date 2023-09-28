@@ -47,7 +47,7 @@ LoadBalancer = namedtuple('LoadBalancer', ['name', 'uuid'])
 LoadBalancerGroup = namedtuple('LoadBalancerGroup', ['name', 'uuid'])
 NodeConf = namedtuple(
     'NodeConf',
-    ['mgmt_net', 'int_net', 'ext_net', 'gw_net', 'ts_net'],
+    ['int_net', 'ext_net', 'gw_net'],
 )
 
 DEFAULT_CTL_TIMEOUT = 60
