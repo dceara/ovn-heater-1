@@ -6,7 +6,7 @@ from ovn_ext_cmd import ExtCmd
 from ovn_context import Context
 from ovn_workload import ChassisNode
 
-from cms.openstack import OpenStackCloud
+from cms.openstack import OpenStackCloud, ExternalNetworkSpec
 
 log = logging.getLogger(__name__)
 
@@ -37,8 +37,13 @@ class BaseOpenstack(ExtCmd):
                 worker_node.provision(ovn)
 
         with Context(ovn, "base_openstack_provision") as ctx:
+            ext_net = ExternalNetworkSpec(
+                neutron_net=ovn.new_external_network(),
+                num_gw_nodes=self.config.n_gws_per_project,
+            )
+
             for _ in range(self.config.n_projects):
-                _ = ovn.new_project(gw_nodes=self.config.n_gws_per_project)
+                _ = ovn.new_project(ext_net=ext_net)
 
             for project in ovn.projects:
                 for index in range(self.config.n_vms_per_project):
