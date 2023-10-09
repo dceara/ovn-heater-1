@@ -22,6 +22,7 @@
   tasks:
   - name: Start central containers
     environment:
+      CENTRAL_NAME: 'ovn-central'
       CHASSIS_COUNT: 0
       CREATE_FAKE_VMS: no
       ENABLE_ETCD: '{{ use_ovsdb_etcd }}'
@@ -46,6 +47,7 @@
   tasks:
   - name: Start worker containers
     environment:
+      CENTRAL_NAME: 'ovn-central'
       CHASSIS_COUNT: 0
       CREATE_FAKE_VMS: no
       ENABLE_ETCD: '{{ use_ovsdb_etcd }}'
