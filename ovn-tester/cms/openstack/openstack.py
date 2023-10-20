@@ -86,8 +86,8 @@ class OpenStackCloud(Cluster):
 
     MAX_GW_PER_ROUTER = 5
 
-    def __init__(self, cluster_cfg, central, brex_cfg):
-        super().__init__(cluster_cfg, central, brex_cfg)
+    def __init__(self, cluster_cfg, central, brex_cfg, az):
+        super().__init__(cluster_cfg, central, brex_cfg, az)
         self.router = None
         self._projects: List[Project] = []
 
