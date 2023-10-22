@@ -1,24 +1,10 @@
-low_scale_task:
-
-  compute_engine_instance:
-    matrix:
-      - image_project: fedora-cloud
-        image: family/fedora-cloud-38
-      - image_project: ubuntu-os-cloud
-        image: family/ubuntu-2304-amd64
-    platform: linux
-    memory: 8G
-    disk: 40
-
+common_task_template: &COMMON_TASK_TEMPLATE
   env:
     DEPENDENCIES: git ansible podman
     FEDORA_DEP: ansible-collection-ansible-posix
                 ansible-collection-ansible-utils
     CIRRUS_WORKING_DIR: /root/ovn-heater
     PHYS_DEPLOYMENT: ${CIRRUS_WORKING_DIR}/physical-deployments/ci.yml
-
-  runtime_cache:
-    folder: runtime-cache
 
   # Make sure we use all the disk available to us.  Similar to the steps
   # described at:
@@ -53,6 +39,26 @@ low_scale_task:
         apt update && apt install -y ${DEPENDENCIES};
        fi'
 
+runtime_builder_task:
+  << : *COMMON_TASK_TEMPLATE
+
+  compute_engine_instance:
+    matrix:
+      - image_project: fedora-cloud
+        image: family/fedora-cloud-38
+      - image_project: ubuntu-os-cloud
+        image: family/ubuntu-2304-amd64
+    platform: linux
+    memory: 8G
+    disk: 40
+
+  runtime_cache:
+    folder: runtime-cache
+    fingerprint_script:
+      - echo ${CIRRUS_BUILD_ID}
+      - echo ${CIRRUS_OS}
+      - awk -F= '/^ID/{print$2}' /etc/os-release | tr -d '"'
+
   unpack_caches_script:
     - mkdir -p runtime runtime-cache
     - tar -xzf runtime-cache/runtime.tar.gz || true
@@ -69,11 +75,65 @@ low_scale_task:
   upload_caches:
     - runtime
 
+low_scale_task:
+  depends_on:
+    - runtime_builder
+
+  << : *COMMON_TASK_TEMPLATE
+
+  compute_engine_instance:
+    matrix:
+      - image_project: fedora-cloud
+        image: family/fedora-cloud-38
+      - image_project: ubuntu-os-cloud
+        image: family/ubuntu-2304-amd64
+    platform: linux
+    memory: 8G
+    disk: 40
+
+  matrix:
+    - name: 'Test Scenario - non IC'
+      env:
+        TEST_SCENARIO: 'test-scenarios/ovn-low-scale.yml'
+        TEST_SCENARIO_OUTDIR: 'low-scale'
+    - name: 'Test Scenario - IC'
+      env:
+        TEST_SCENARIO: 'test-scenarios/ovn-low-scale-ic.yml'
+        TEST_SCENARIO_OUTDIR: 'low-scale-ic'
+
+  matrix:
+    - name: 'Address Family - dual'
+      env:
+        IP4: True
+        IP6: True
+    - name: 'Address Family - ip4'
+      env:
+        IP4: True
+        IP6: False
+    - name: 'Address Family - ip6'
+      env:
+        IP4: False
+        IP6: True
+
+  runtime_cache:
+    folder: runtime-cache
+    fingerprint_script:
+      - echo ${CIRRUS_BUILD_ID}
+      - echo ${CIRRUS_OS}
+      - awk -F= '/^ID/{print$2}' /etc/os-release | tr -d '"'
+
+  unpack_caches_script:
+    - tar -xzf runtime-cache/runtime.tar.gz
+    - podman load -i runtime/ovn-fake-multinode/ovn-multi-node-image.tar
+
   test_script:
-    - 'sed -i "s/^  log_cmds\: False/  log_cmds\: True/"
-        test-scenarios/ovn-low-scale*.yml'
-    - ./do.sh run test-scenarios/ovn-low-scale.yml low-scale
-    - ./do.sh run test-scenarios/ovn-low-scale-ic.yml low-scale-ic
+    - 'sed -i "s/<host>/$(hostname)/g" ${PHYS_DEPLOYMENT}'
+    - 'sed -i "s/^  log_cmds\: False/  log_cmds\: True/" ${TEST_SCENARIO}'
+    - 'sed -i "s/^  run_ipv4\: .*\$/  run_ipv4\: $IP4/" ${TEST_SCENARIO}'
+    - 'sed -i "s/^  run_ipv6\: .*\$/  run_ipv6\: $IP6/" ${TEST_SCENARIO}'
+    - ./do.sh install-deps
+    - ./do.sh refresh-tester
+    - ./do.sh run ${TEST_SCENARIO} ${TEST_SCENARIO_OUTDIR}
 
   check_logs_script:
     - ./utils/logs-checker.sh

@@ -106,7 +106,6 @@ function generate() {
 }
 
 function install_deps_local_rpm() {
-    echo "-- Installing local dependencies"
     yum install redhat-lsb-core datamash \
         python3-netaddr python3 python3-devel \
         podman \
@@ -114,15 +113,31 @@ function install_deps_local_rpm() {
 }
 
 function install_deps_local_deb() {
-    echo "-- Installing local dependencies"
     apt -y install datamash podman \
            python3-netaddr python3 python3-all-dev python3-venv
 }
 
+function install_deps_local() {
+    echo "-- Installing local dependencies"
+    pushd ${rundir}
+    if is_rpm_based
+    then
+        install_deps_local_rpm
+    elif is_deb_based
+    then
+        install_deps_local_deb
+    else
+        die_distro
+    fi
+    popd
+}
+
 function install_deps_remote() {
     echo "-- Installing dependencies on all nodes"
+    pushd ${rundir}
     ansible-playbook ${ovn_fmn_playbooks}/install-dependencies.yml \
         -i ${hosts_file}
+    popd
 }
 
 function install_venv() {
@@ -296,17 +311,9 @@ function pull_ovn_tester() {
 }
 
 function install() {
-    pushd ${rundir}
-    if is_rpm_based
-    then
-        install_deps_local_rpm
-    elif is_deb_based
-    then
-        install_deps_local_deb
-    else
-        die_distro
-    fi
+    install_deps_local
     install_deps_remote
+    pushd ${rundir}
     install_venv
     install_ovn_fake_multinode
     init_ovn_fake_multinode
@@ -501,7 +508,7 @@ function run_test() {
 }
 
 function usage() {
-    die "Usage: $0 install|generate|init|refresh-tester|run <scenario> <out-dir>"
+    die "Usage: $0 install|install-deps|generate|init|refresh-tester|run <scenario> <out-dir>"
 }
 
 do_lockfile=/tmp/do.sh.lock
@@ -513,6 +520,8 @@ function take_lock() {
 
 case "${1:-"usage"}" in
     "install")
+        ;&
+    "install-deps")
         ;&
     "generate")
         ;&
@@ -544,6 +553,11 @@ case "${1:-"usage"}" in
             echo "==============="
         ) >> ${installer_log_file}
         install 2>&1 | tee -a ${installer_log_file}
+        ;;
+    "install-deps")
+        generate
+        install_deps_local
+        install_deps_remote
         ;;
     "generate")
         generate
