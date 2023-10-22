@@ -72,8 +72,22 @@ low_scale_task:
   test_script:
     - 'sed -i "s/^  log_cmds\: False/  log_cmds\: True/"
         test-scenarios/ovn-low-scale*.yml'
-    - ./do.sh run test-scenarios/ovn-low-scale.yml low-scale
-    - ./do.sh run test-scenarios/ovn-low-scale-ic.yml low-scale-ic
+    - 'for ip4 in True False; do
+        for ip6 in True False; do
+          if [ "$ip4" = "False" ] && [ "$ip6" = "False" ]; then
+            continue;
+          fi;
+          echo "Running with ip4 $ip4 and ip6 $ip6";
+          sed -i "s/^  run_ipv4\: .*\$/  run_ipv4\: $ip4/"
+            test-scenarios/ovn-low-scale*.yml;
+          sed -i "s/^  run_ipv6\: .*\$/  run_ipv6\: $ip6/"
+            test-scenarios/ovn-low-scale*.yml;
+          echo "Running ovn-kubernetes non-IC";
+          ./do.sh run test-scenarios/ovn-low-scale.yml low-scale;
+          echo "Running ovn-kubernetes IC";
+          ./do.sh run test-scenarios/ovn-low-scale-ic.yml low-scale-ic;
+        done;
+      done'
 
   check_logs_script:
     - ./utils/logs-checker.sh
