@@ -121,6 +121,10 @@ class Sandbox:
 
         # Splitting and removing all lines with terminal control chars.
         out = out.splitlines()
+
+        if '++++start' not in out:
+            log.info(f'DEBUG DEBUG missing ++++start got: {out}')
+
         start = out.index('++++start') + 1
         end = out.index('++++end') - 1
         exit_status = int(out[end])
