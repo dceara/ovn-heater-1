@@ -118,8 +118,8 @@ ovn_repo="${OVN_REPO:-https://github.com/ovn-org/ovn.git}"
 ovn_branch="${OVN_BRANCH:-main}"
 
 # ovn-fake-multinode env vars
-ovn_fmn_repo="${OVN_FAKE_MULTINODE_REPO:-https://github.com/ovn-org/ovn-fake-multinode.git}"
-ovn_fmn_branch="${OVN_FAKE_MULTINODE_BRANCH:-main}"
+ovn_fmn_repo="${OVN_FAKE_MULTINODE_REPO:-https://github.com/almusil/ovn-fake-multinode.git}"
+ovn_fmn_branch="${OVN_FAKE_MULTINODE_BRANCH:-unused}"
 
 OS_BASE="${OS_BASE:-fedora}"
 OS_IMAGE_OVERRIDE="${OS_IMAGE_OVERRIDE}"
